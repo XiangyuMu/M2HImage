@@ -1,0 +1,13 @@
+name: mcic
+channels:
+  - pytorch
+  - nvidia
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - pytorch=2.2.2
+  - torchvision=0.17.2
+  - pytorch-cuda=12.1
+  - pip:
+      - -e .[dev,parsing]

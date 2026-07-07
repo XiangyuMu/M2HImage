@@ -1,0 +1,17 @@
+data:
+  root: /data/project/dataset
+  mannequin_dir: mannequin
+  human_dir: human
+  cache_dir: cache_mcic
+  split_seed: 42
+  train_ratio: 0.8
+  val_ratio: 0.1
+
+image:
+  height: 512
+  width: 512
+  interpolation_image: bicubic
+  interpolation_mask: nearest
+  center_crop: false
+  pad_to_aspect_ratio: true
+  pad_value: 255

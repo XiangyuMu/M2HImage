@@ -1,0 +1,40 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+/outputs/
+/cache_mcic/
+*.egg-info/
+
+
+# Local model weights and generated artifacts
+/models/
+phase0_smoke/
+phase0_smoke16/
+checkpoints/
+logs/
+wandb/
+
+# Python/build artifacts
+build/
+dist/
+
+# Large/local data artifacts
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.onnx
+*.npz
+*.npy
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.bmp
+!docs/**/*.png
+
+# Codex/local workspace metadata
+.agents/
+.codex/

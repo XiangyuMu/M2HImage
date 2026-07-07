@@ -40,8 +40,6 @@ py-modules = [
   "eval_b2_local_metrics",
   "eval_b2_make_vis",
   "eval_watcher",
-  "phase0",
-  "phase0_diagnose",
   "speed_bench",
   "train_paired",
 ]

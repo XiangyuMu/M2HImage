@@ -2,8 +2,6 @@
 
 This repository contains the current FLUX.1-dev Phase 1 path for MA-RA-CDT paired flow warmup and B2 adapter-only baseline evaluation.
 
-The original SDXL MCIC prototype has been archived under `archive/legacy_sdxl/` with its old configs, scripts, and tests. It is not used by the current FLUX Phase 1 training/evaluation path.
-
 ## Critical Notes
 
 - Fixed on 2026-07-07: custom FLUX training/inference paths pass timestep `tau` in `[0,1]` to `FluxTransformer2DModel` and `FluxControlNetModel`. Diffusers internally multiplies by 1000.
@@ -23,7 +21,6 @@ eval_b2_make_vis.py              B2 contact sheets
 scripts/sanity_flux_timestep.py  Fix 1 prompt-only FLUX timestep sanity check
 scripts/run_phase1_pipeline.sh   cache + training + watcher launch helper
 scripts/run_b2_generation.sh     4-GPU B2 generation helper
-archive/legacy_sdxl/             deprecated SDXL MCIC code/configs/scripts/tests
 ```
 
 ## Phase 1 Execution Order

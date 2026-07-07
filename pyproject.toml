@@ -3,39 +3,49 @@ requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mcic"
-version = "0.1.0"
-description = "Masked Counterfactual Identity Consistency training for mannequin-to-human image translation."
+name = "m2himage"
+version = "0.2.0"
+description = "FLUX Phase 1 paired warmup and B2 baseline code for M2HImage."
 readme = "README.md"
-requires-python = ">=3.10,<3.13"
+requires-python = ">=3.10"
 dependencies = [
-  "accelerate==0.33.0",
-  "diffusers==0.30.3",
-  "facenet-pytorch>=2.6",
-  "lpips>=0.1.4",
-  "numpy>=1.26,<2.0",
-  "peft==0.12.0",
-  "Pillow>=10.2,<10.3",
-  "PyYAML>=6.0",
-  "safetensors>=0.4,<0.8",
-  "scikit-image>=0.23",
-  # facenet-pytorch 2.6.0 currently constrains this compatible pair.
-  "torch>=2.2,<2.3",
-  "torchvision>=0.17,<0.18",
-  "transformers==4.44.2"
+  "accelerate",
+  "bitsandbytes",
+  "diffusers",
+  "insightface",
+  "lpips",
+  "numpy",
+  "opencv-python",
+  "peft",
+  "Pillow",
+  "PyYAML",
+  "safetensors",
+  "scikit-image",
+  "torch",
+  "torchvision",
+  "tqdm",
+  "transformers",
+  "wandb",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.2", "ruff>=0.5"]
-parsing = ["opencv-python>=4.10", "insightface>=0.7.3", "onnxruntime-gpu>=1.18"]
+dev = ["pytest", "ruff"]
 
-[tool.setuptools.packages.find]
-include = ["mcic*"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-addopts = "-q"
+[tool.setuptools]
+py-modules = [
+  "build_cache",
+  "conditions",
+  "dataset",
+  "eval_b2",
+  "eval_b2_local_metrics",
+  "eval_b2_make_vis",
+  "eval_watcher",
+  "phase0",
+  "phase0_diagnose",
+  "speed_bench",
+  "train_paired",
+]
 
 [tool.ruff]
-line-length = 100
+line-length = 140
 target-version = "py310"

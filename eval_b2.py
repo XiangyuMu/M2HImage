@@ -191,7 +191,7 @@ def make_cf_batch(cache: Path, text_cache: Path, mannequin_id: str, identity_id:
         'pose_latents': torch.from_numpy(np.asarray(m['pose_latents'])).float(),
         'identity': torch.from_numpy(np.asarray(j['identity'])).float(),
         'appearance': torch.from_numpy(np.asarray(j['appearance'])).float(),
-        'garment': torch.from_numpy(np.asarray(m['garment'])).float(),
+        'garment': torch.from_numpy(np.asarray(m['garment_grid'] if 'garment_grid' in m.files else m['garment'])).float(),
         'head_pose': torch.from_numpy(np.asarray(m['head_pose'])).float(),
         'prompt_embeds': torch.from_numpy(np.asarray(text['prompt_embeds'])).float(),
         'pooled_prompt_embeds': torch.from_numpy(np.asarray(text['pooled_prompt_embeds'])).float(),
@@ -247,22 +247,21 @@ def write_report(cfg: dict, subset: dict, out: Path, generated_count: int | None
         for seed in row.get('seeds', cfg['eval']['b2_seeds'])
     ]
     generated_images = [path for path in expected_paths if path.exists()]
-    deltas = []
-    garment_scores = []
-    by_m = {}
-    for row in subset['pairs']:
-        mid, jid = row['mannequin_id'], row['identity_id']
-        m_path, j_path = cache / f'{mid}.npz', cache / f'{jid}.npz'
-        if not m_path.exists() or not j_path.exists():
+    consistency = []
+    missing_keys = []
+    checked_ids = sorted(set(subset.get('mannequins', []) + subset.get('identity_pool', [])))
+    for sid in checked_ids:
+        path = cache / f'{sid}.npz'
+        if not path.exists():
+            missing_keys.append(f'{sid}:missing-cache')
             continue
-        m = np.load(m_path)
-        j = np.load(j_path)
-        deltas.append(cached_cosine(m['identity'], j['identity']) - cached_cosine(m['identity'], m['identity']))
-        by_m.setdefault(mid, []).append(jid)
-    for mid, ids in by_m.items():
-        feats = [np.load(cache / f'{sid}.npz')['garment'] for sid in ids if (cache / f'{sid}.npz').exists()]
-        for a, b in combinations(feats, 2):
-            garment_scores.append(cached_cosine(a, b))
+        row = np.load(path)
+        for key in ('identity', 'appearance', 'garment_grid', 'head_pose'):
+            if key not in row.files:
+                missing_keys.append(f'{sid}:{key}')
+        if 'identity' in row.files:
+            emb = np.asarray(row['identity'])
+            consistency.append(cached_cosine(emb, emb.copy()))
     if generated_count is None:
         gen_line = 'generation command not run in this invocation'
     else:
@@ -277,10 +276,10 @@ def write_report(cfg: dict, subset: dict, out: Path, generated_count: int | None
         f"actual generated images: {len(generated_images)}",
         f"generation status: {generation_status}",
         gen_line, '',
-        '## Cache-space Sanity Proxies', '',
-        'These are not official B2 metrics; they only verify that the frozen subset/cache is wired correctly.',
-        f"DeltaID cache proxy mean={mean(deltas):.4f}, median={median(deltas):.4f}" if deltas else 'DeltaID cache proxy unavailable until B2 pair caches are built',
-        f"Same-mannequin cross-identity garment-token cosine mean={mean(garment_scores):.4f}" if garment_scores else 'Garment proxy unavailable until identity caches are built', '',
+        '## Cache-space Sanity', '',
+        'This section only checks cache wiring; it is not an identity or garment metric.',
+        f"same-id embedding reload consistency mean={mean(consistency):.4f}, min={min(consistency):.4f}" if consistency else 'same-id embedding reload consistency unavailable',
+        f"required cache key check: {'ok' if not missing_keys else 'missing ' + ', '.join(missing_keys[:20])}", '',
         '## Official Generated-image Metrics', '',
         'Status: BLOCKED by missing local held-out metric runners/weights, not by generation.',
         '- DeltaID: requires held-out AdaFace/CurricularFace. Local search found only InsightFace antelopev2/glintr100, which is the training identity backbone and is therefore not used.',
@@ -292,7 +291,6 @@ def write_report(cfg: dict, subset: dict, out: Path, generated_count: int | None
     ]
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text('\n'.join(lines) + '\n', encoding='utf-8')
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(description='Build/freeze B2 subset, optionally generate B2 images, and write baseline report.')

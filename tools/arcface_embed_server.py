@@ -26,7 +26,7 @@ def main() -> None:
             root=str(args.model_root),
             providers=['CUDAExecutionProvider', 'CPUExecutionProvider'],
         )
-        app.prepare(ctx_id=args.device_id, det_size=(224, 224))
+        app.prepare(ctx_id=args.device_id, det_size=(640, 640))
 
     for line in sys.stdin:
         try:
@@ -43,7 +43,7 @@ def main() -> None:
             emb = np.asarray(best.normed_embedding, dtype=np.float32)
             if emb.shape != (512,):
                 raise RuntimeError(f'invalid embedding shape: {emb.shape}')
-            print(json.dumps({'ok': True, 'embedding': emb.tolist()}), flush=True)
+            print(json.dumps({'ok': True, 'embedding': emb.tolist(), 'bbox': [float(v) for v in best.bbox], 'det_score': float(getattr(best, 'det_score', 0.0))}), flush=True)
         except Exception as exc:  # noqa: BLE001
             print(json.dumps({'ok': False, 'error': str(exc)}), flush=True)
 

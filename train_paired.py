@@ -40,7 +40,7 @@ class WarmupFlowModel(torch.nn.Module):
         tau = torch.rand(z0.shape[0], device=device, dtype=dtype)
         z_tau = (1.0 - tau.view(-1, 1, 1)) * z0 + tau.view(-1, 1, 1) * z1
         target_v = z1 - z0
-        model_timestep = tau * 1000.0
+        model_timestep = tau
         prompt = batch['prompt_embeds'].to(device=device, dtype=dtype)
         pooled = batch['pooled_prompt_embeds'].to(device=device, dtype=dtype)
         if prompt.ndim == 2:
@@ -83,7 +83,9 @@ class WarmupFlowModel(torch.nn.Module):
             return_dict=True,
         ).sample
         loss = F.mse_loss(pred.float(), target_v.float())
-        return loss, {'loss_pair': loss.detach()}
+        head_null = batch.get('head_pose_is_null')
+        head_null_ratio = head_null.float().mean().detach() if head_null is not None else torch.zeros((), device=device, dtype=torch.float32)
+        return loss, {'loss_pair': loss.detach(), 'head_pose_null_ratio': head_null_ratio}
 
 
 def setup_dist() -> tuple[int, int, int]:
@@ -125,15 +127,30 @@ def load_components(cfg: dict[str, Any], device: torch.device, dtype: torch.dtyp
         vae = AutoencoderKL.from_pretrained(cfg['model']['base'], subfolder='vae', torch_dtype=dtype, local_files_only=True)
         vae.requires_grad_(False).to(device=device, dtype=dtype).eval()
     adapter = FluxIdentityAdapter(cfg['model']['identity_adapter']).to(device=device, dtype=dtype)
-    return transformer, controlnet, vae, adapter, {'controlnet': control_info, 'lora': lora_note}
+    return transformer, controlnet, vae, adapter, {'controlnet': control_info, 'lora': lora_note, 'adapter': adapter.launch_note()}
 
 
-def build_optimizer(params, cfg: dict[str, Any]):
+def build_optimizer(module: torch.nn.Module, cfg: dict[str, Any]):
     lr = float(cfg['_runtime']['effective_lr'])
+    adapter_mult = float(cfg['model'].get('identity_adapter', {}).get('fallback_projection_lr_mult', 5.0))
+    lora_params = []
+    adapter_params = []
+    for name, param in module.named_parameters():
+        if not param.requires_grad:
+            continue
+        if '.adapter.' in name or name.startswith('adapter.') or name.startswith('module.adapter.'):
+            adapter_params.append(param)
+        else:
+            lora_params.append(param)
+    groups = []
+    if lora_params:
+        groups.append({'params': lora_params, 'lr': lr})
+    if adapter_params:
+        groups.append({'params': adapter_params, 'lr': lr * adapter_mult})
     if cfg['training'].get('optimizer') == 'paged_adamw8bit':
         import bitsandbytes as bnb
-        return bnb.optim.PagedAdamW8bit(params, lr=lr)
-    return torch.optim.AdamW(params, lr=lr)
+        return bnb.optim.PagedAdamW8bit(groups)
+    return torch.optim.AdamW(groups)
 
 
 def recompute_batch_runtime(cfg: dict[str, Any], world_size: int, micro: int) -> None:
@@ -241,7 +258,13 @@ def save_checkpoint(path: Path, model: WarmupFlowModel, optimizer, step: int, sa
 def load_checkpoint(path: Path, model: WarmupFlowModel, optimizer=None, sampler=None) -> int:
     from peft import set_peft_model_state_dict
     payload = torch.load(path / 'trainable.pt', map_location='cpu')
-    model.adapter.load_state_dict(payload['adapter'])
+    adapter_state = payload['adapter']
+    current = model.adapter.state_dict()
+    compatible = {k: v for k, v in adapter_state.items() if k in current and tuple(current[k].shape) == tuple(v.shape)}
+    dropped = sorted(set(adapter_state) - set(compatible))
+    missing, unexpected = model.adapter.load_state_dict(compatible, strict=False)
+    if dropped or missing or unexpected:
+        print(f'[warn] adapter checkpoint loaded partially from {path}: dropped={len(dropped)}, missing={len(missing)}, unexpected={len(unexpected)}', flush=True)
     set_peft_model_state_dict(model.transformer, payload['transformer_lora'])
     if optimizer is not None and 'optimizer' in payload:
         optimizer.load_state_dict(payload['optimizer'])
@@ -316,7 +339,7 @@ def train(args: argparse.Namespace) -> None:
     # DDP is intentionally used instead of FSDP/DeepSpeed: each A6000 fits the full Phase1 model,
     # cards are homogeneous, and frozen ControlNet/VAE/encoders have requires_grad=False so they are not placed in gradient buckets.
     ddp = DDP(model, device_ids=[local_rank], find_unused_parameters=False) if world_size > 1 else model
-    optimizer = build_optimizer([p for p in ddp.parameters() if p.requires_grad], cfg)
+    optimizer = build_optimizer(ddp, cfg)
 
     output = Path(cfg['experiment']['output_root']) / cfg['experiment']['id']
     ckpt_dir = output / 'checkpoints'
@@ -356,7 +379,7 @@ def train(args: argparse.Namespace) -> None:
             global_step += 1
             if rank == 0 and (global_step % int(cfg['training']['log_every']) == 0 or global_step <= 3):
                 log_dir.mkdir(parents=True, exist_ok=True)
-                row = {'step': global_step, 'loss_pair': float(metrics['loss_pair'].float().cpu()), 'lr': cfg['_runtime']['effective_lr'], 'peak_gib': torch.cuda.max_memory_allocated(device) / 1024**3}
+                row = {'step': global_step, 'loss_pair': float(metrics['loss_pair'].float().cpu()), 'head_pose_null_ratio': float(metrics.get('head_pose_null_ratio', torch.tensor(0.0)).float().cpu()), 'lr': cfg['_runtime']['effective_lr'], 'peak_gib': torch.cuda.max_memory_allocated(device) / 1024**3}
                 with (log_dir / 'train.jsonl').open('a', encoding='utf-8') as handle:
                     handle.write(json.dumps(row, ensure_ascii=False) + '\n')
                 print(f'[rank0] {row}', flush=True)

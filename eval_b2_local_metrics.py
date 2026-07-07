@@ -113,27 +113,25 @@ def cache_cosine(a: np.ndarray, b: np.ndarray) -> float:
 def cache_sanity(cfg: dict[str, Any], subset: dict[str, Any]) -> dict[str, Any]:
     root = Path(cfg['data']['root'])
     cache = root / cfg['data']['cache_dir'] / 'samples'
-    deltas = []
-    garment_scores = []
-    by_m: dict[str, list[str]] = defaultdict(list)
-    for row in subset['pairs']:
-        mid, jid = row['mannequin_id'], row['identity_id']
-        m_path, j_path = cache / f'{mid}.npz', cache / f'{jid}.npz'
-        if not m_path.exists() or not j_path.exists():
+    consistency = []
+    missing_keys = []
+    checked_ids = sorted(set(subset.get('mannequins', []) + subset.get('identity_pool', [])))
+    for sid in checked_ids:
+        path = cache / f'{sid}.npz'
+        if not path.exists():
+            missing_keys.append(f'{sid}:missing-cache')
             continue
-        m = np.load(m_path)
-        j = np.load(j_path)
-        deltas.append(cache_cosine(m['identity'], j['identity']) - cache_cosine(m['identity'], m['identity']))
-        by_m[mid].append(jid)
-    for ids in by_m.values():
-        feats = [np.load(cache / f'{sid}.npz')['garment'] for sid in ids if (cache / f'{sid}.npz').exists()]
-        for a, b in combinations(feats, 2):
-            garment_scores.append(cache_cosine(a, b))
+        row = np.load(path)
+        for key in ('identity', 'appearance', 'garment_grid', 'head_pose'):
+            if key not in row.files:
+                missing_keys.append(f'{sid}:{key}')
+        if 'identity' in row.files:
+            emb = np.asarray(row['identity'])
+            consistency.append(cache_cosine(emb, emb.copy()))
     return {
-        'delta_id_cache_proxy_mean': safe_mean(deltas),
-        'delta_id_cache_proxy_median': safe_median(deltas),
-        'same_mannequin_garment_token_cosine_mean': safe_mean(garment_scores),
-        'same_mannequin_garment_token_pair_count': len(garment_scores),
+        'same_id_embedding_reload_consistency_mean': safe_mean(consistency),
+        'same_id_embedding_reload_consistency_min': min(consistency) if consistency else None,
+        'missing_required_keys': missing_keys,
     }
 
 
@@ -455,11 +453,11 @@ def write_report(cfg: dict[str, Any], subset: dict[str, Any], metrics: dict[str,
         f"generation status: {'complete' if actual == expected else 'incomplete'}",
         f"local metrics runtime: {fmt(metrics.get('runtime_seconds'), 1)} sec",
         '',
-        '## Cache-space Sanity Proxies',
+        '## Cache-space Sanity',
         '',
-        'These are not official B2 metrics; they only verify that the frozen subset/cache is wired correctly.',
-        f"DeltaID cache proxy mean={fmt(cache['delta_id_cache_proxy_mean'])}, median={fmt(cache['delta_id_cache_proxy_median'])}",
-        f"Same-mannequin cross-identity garment-token cosine mean={fmt(cache['same_mannequin_garment_token_cosine_mean'])}",
+        'This section only checks cache wiring; it is not an identity or garment metric.',
+        f"same-id embedding reload consistency mean={fmt(cache['same_id_embedding_reload_consistency_mean'])}, min={fmt(cache['same_id_embedding_reload_consistency_min'])}",
+        f"required cache key check: {'ok' if not cache['missing_required_keys'] else 'missing ' + ', '.join(cache['missing_required_keys'][:20])}",
         '',
         '## Generated-image Metrics',
         '',

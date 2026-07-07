@@ -11,8 +11,9 @@ from PIL import Image
 from tqdm import tqdm
 
 from conditions import (
-    arcface_embedding_from_path, assert_real_controlnet, choose_dtype, find_one, garment_crop, load_clip_vision,
-    load_head_pose_token, load_text_embeddings, load_yaml, pack_latents, pil_to_tensor, pooled_clip_feature,
+    arcface_embedding_from_path, assert_real_controlnet, choose_dtype, clip_patch_grid_feature, find_one, garment_crop,
+    head_crop_from_original, load_clip_vision, load_head_pose_token, load_text_embeddings, load_yaml, pack_latents,
+    pil_to_tensor, pooled_clip_feature,
     read_ids, seed_everything, short_hash_path,
 )
 from dataset import write_cache_manifest
@@ -31,33 +32,62 @@ def encode_image_to_packed_latents(vae, image: Image.Image, resolution: int, dev
 def build_one(root: Path, sample_id: str, vae, clip_model, resolution: int, device, dtype, cfg: dict) -> dict[str, np.ndarray]:
     human = Image.open(find_one(root / 'images/human', sample_id)).convert('RGB')
     pose = Image.open(find_one(root / 'dwpose/without_head/mannequin', sample_id)).convert('RGB')
+    human_path = find_one(root / 'images/human', sample_id)
     face_path = find_one(root / 'derived/face_crops/human', sample_id)
-    face = Image.open(face_path).convert('RGB')
     target_latents = encode_image_to_packed_latents(vae, human, resolution, device, dtype)
     pose_latents = encode_image_to_packed_latents(vae, pose, resolution, device, dtype)
     device_id = device.index if getattr(device, 'type', None) == 'cuda' and device.index is not None else 0
-    identity = arcface_embedding_from_path(
-        face_path,
-        helper_python=cfg['cache'].get('arcface_helper_python'),
-        helper_script=cfg['cache'].get('arcface_helper_script'),
+    try:
+        identity = arcface_embedding_from_path(
+            face_path,
+            helper_python=cfg['cache'].get('arcface_helper_python'),
+            helper_script=cfg['cache'].get('arcface_helper_script'),
+            model_root=cfg['cache'].get('arcface_model_root', '/data/muxiangyu/modelLibrary/insightface'),
+            device_id=device_id,
+        )
+    except RuntimeError:
+        identity = arcface_embedding_from_path(
+            human_path,
+            helper_python=cfg['cache'].get('arcface_helper_python'),
+            helper_script=cfg['cache'].get('arcface_helper_script'),
+            model_root=cfg['cache'].get('arcface_model_root', '/data/muxiangyu/modelLibrary/insightface'),
+            device_id=device_id,
+        )
+    head_crop = head_crop_from_original(
+        human,
         model_root=cfg['cache'].get('arcface_model_root', '/data/muxiangyu/modelLibrary/insightface'),
         device_id=device_id,
+        image_path=human_path,
+        helper_python=cfg['cache'].get('arcface_helper_python'),
+        helper_script=cfg['cache'].get('arcface_helper_script'),
     )
-    appearance = pooled_clip_feature(clip_model, face, device, dtype)
-    garment = pooled_clip_feature(clip_model, garment_crop(root, sample_id), device, dtype)
-    head_pose = load_head_pose_token(root, sample_id)
+    debug_dir = root / cfg['data']['cache_dir'] / 'debug_head_crops'
+    debug_count = int(cfg['cache'].get('head_crop_debug_count', 20))
+    if debug_count > 0:
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        if len(list(debug_dir.glob('*.png'))) < debug_count:
+            head_crop.save(debug_dir / f'{sample_id}.png')
+    appearance = pooled_clip_feature(clip_model, head_crop, device, dtype)
+    garment_grid = clip_patch_grid_feature(
+        clip_model,
+        garment_crop(root, sample_id),
+        device,
+        dtype,
+        max_tokens=int(cfg['model']['identity_adapter'].get('garment_grid_max_tokens', 64)),
+    )
+    head_pose = load_head_pose_token(root, sample_id, dropout_p=0.0)
     return {
         'target_latents': target_latents,
         'pose_latents': pose_latents,
         'identity': identity.astype('float32'),
         'appearance': appearance.astype('float32'),
-        'garment': garment.astype('float32'),
+        'garment_grid': garment_grid.astype('float32'),
         'head_pose': head_pose.astype('float32'),
     }
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description='Build Phase 1 offline cache: VAE latents, text embeddings, garment/id/head tokens.')
+    parser = argparse.ArgumentParser(description='Build Phase 1 offline cache: VAE latents, text embeddings, garment grid/id/head tokens.')
     parser.add_argument('--config', default='configs/warmup.yaml')
     parser.add_argument('--split', default='train,val,test')
     parser.add_argument('--num-shards', type=int, default=1)
@@ -127,6 +157,8 @@ def main() -> None:
         'base_hash': short_hash_path(cfg['model']['base']),
         'controlnet': assert_real_controlnet(cfg['model']['controlnet']),
         'clip_vision_model': cfg['cache']['clip_vision_model'],
+        'garment_grid_max_tokens': cfg['model']['identity_adapter'].get('garment_grid_max_tokens', 64),
+        'head_crop_debug_dir': str(cache_dir / 'debug_head_crops'),
         'shard_index': args.shard_index,
         'num_shards': args.num_shards,
         'failures': len(failures),

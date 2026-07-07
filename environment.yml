@@ -1,13 +1,14 @@
-name: mcic
+name: m2himage_phase1
 channels:
   - pytorch
   - nvidia
+  - conda-forge
   - defaults
 dependencies:
   - python=3.11
   - pip
-  - pytorch=2.2.2
-  - torchvision=0.17.2
+  - pytorch
+  - torchvision
   - pytorch-cuda=12.1
   - pip:
-      - -e .[dev,parsing]
+      - -e .[dev]

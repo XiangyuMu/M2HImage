@@ -25,15 +25,18 @@ model:
   precision: bf16
   lora_rank: 16
   identity_adapter:
-    type: flux_dual_identity_adapter
-    version: phase1-local-2026-07-06
+    type: flux_projection_fallback_zero_gated
+    version: phase1-fallback-zero-gated-2026-07-07
+    weight_path: none
+    fallback_reason: local search found no PuLID-FLUX or InfiniteYou implementation/weights; replace before A9 ablation if mature adapter assets become available
+    fallback_projection_lr_mult: 5.0
     id_dim: 512
     appearance_dim: 1024
-    garment_dim: 1024
+    garment_grid_dim: 1024
+    garment_grid_max_tokens: 64
     token_dim: 4096
     id_tokens: 4
     appearance_tokens: 4
-    garment_tokens: 8
     pose_tokens: 1
     dropout: 0.0
   gradient_checkpointing:
@@ -51,6 +54,7 @@ cache:
   arcface_helper_python: /home/muxiangyu/miniconda3/envs/imagdressing_m2h/bin/python
   arcface_helper_script: /data/muxiangyu/pythonPrograms/M2HImage/tools/arcface_embed_server.py
   heldout_face_model: /data/muxiangyu/modelLibrary/insightface/models/antelopev2
+  head_crop_debug_count: 20
 
 training:
   total_steps: 6000
@@ -61,6 +65,7 @@ training:
   preferred_micro_batch: 2
   grad_accum: auto
   max_grad_norm: 1.0
+  head_pose_dropout: 0.1
   optimizer: paged_adamw8bit
   num_workers_per_rank: 8
   pin_memory: true

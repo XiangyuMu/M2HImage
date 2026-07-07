@@ -167,11 +167,12 @@ def unpack_latents(tokens: torch.Tensor, resolution: int) -> torch.Tensor:
 
 
 class FluxIdentityAdapter(nn.Module):
-    """PuLID/InstantID-style local dual-path adapter for Phase 1 B2.
+    """Fallback FLUX identity/condition token adapter with zero-init gates.
 
-    It projects cached identity embedding, 1.8x face appearance token, garment token and head-pose token
-    into additional FLUX text-stream tokens. This is intentionally adapter-only and paired-flow only;
-    there is no counterfactual branch or CF loss in Phase 1 warmup.
+    No local PuLID-FLUX or InfiniteYou implementation/weights were found in this environment, so
+    Phase 1 uses the explicitly documented fallback: projection tokens with per-route zero gates.
+    The fallback changes the A9 ablation premise and must be replaced with a mature adapter when
+    PuLID/InfiniteYou assets are available.
     """
 
     def __init__(self, cfg: dict[str, Any]) -> None:
@@ -179,19 +180,56 @@ class FluxIdentityAdapter(nn.Module):
         token_dim = int(cfg.get('token_dim', 4096))
         self.id_tokens = int(cfg.get('id_tokens', 4))
         self.appearance_tokens = int(cfg.get('appearance_tokens', 4))
-        self.garment_tokens = int(cfg.get('garment_tokens', 8))
         self.pose_tokens = int(cfg.get('pose_tokens', 1))
+        self.max_garment_tokens = int(cfg.get('garment_grid_max_tokens', cfg.get('garment_tokens', 64)))
+        self.adapter_type = str(cfg.get('type', 'flux_projection_fallback_zero_gated'))
+        self.version = str(cfg.get('version', 'unknown'))
+        self.fallback_reason = str(cfg.get('fallback_reason', 'local mature FLUX identity adapter not configured'))
+        self.weight_path = str(cfg.get('weight_path', 'none'))
         self.id_proj = nn.Sequential(nn.Linear(int(cfg.get('id_dim', 512)), token_dim * self.id_tokens), nn.SiLU())
         self.app_proj = nn.Sequential(nn.Linear(int(cfg.get('appearance_dim', 1024)), token_dim * self.appearance_tokens), nn.SiLU())
-        self.garment_proj = nn.Sequential(nn.Linear(int(cfg.get('garment_dim', 1024)), token_dim * self.garment_tokens), nn.SiLU())
+        self.garment_proj = nn.Linear(int(cfg.get('garment_grid_dim', cfg.get('garment_dim', 1024))), token_dim)
         self.pose_proj = nn.Sequential(nn.Linear(7, token_dim * self.pose_tokens), nn.SiLU())
+        self.id_gate = nn.Parameter(torch.zeros(()))
+        self.appearance_gate = nn.Parameter(torch.zeros(()))
+        self.garment_gate = nn.Parameter(torch.zeros(()))
+        self.pose_gate = nn.Parameter(torch.zeros(()))
         self.norm = nn.LayerNorm(token_dim)
         self.dropout = nn.Dropout(float(cfg.get('dropout', 0.0)))
         self.token_dim = token_dim
+        self.register_buffer('garment_pos_embed', self._make_2d_pos_embed(self.max_garment_tokens, token_dim), persistent=False)
+
+    @staticmethod
+    def _make_2d_pos_embed(token_count: int, dim: int) -> torch.Tensor:
+        side = int(math.ceil(math.sqrt(token_count)))
+        ys, xs = torch.meshgrid(torch.linspace(-1.0, 1.0, side), torch.linspace(-1.0, 1.0, side), indexing='ij')
+        coords = torch.stack([ys.reshape(-1), xs.reshape(-1)], dim=1)[:token_count]
+        freq_count = max(1, dim // 4)
+        freqs = torch.exp(torch.linspace(0, math.log(10000.0), freq_count) * -1.0)
+        y = coords[:, :1] * freqs[None, :]
+        x = coords[:, 1:] * freqs[None, :]
+        pos = torch.cat([torch.sin(y), torch.cos(y), torch.sin(x), torch.cos(x)], dim=1)
+        if pos.shape[1] < dim:
+            pos = torch.nn.functional.pad(pos, (0, dim - pos.shape[1]))
+        return pos[:, :dim].float()
 
     @property
     def token_count(self) -> int:
-        return self.id_tokens + self.appearance_tokens + self.garment_tokens + self.pose_tokens
+        return self.id_tokens + self.appearance_tokens + self.max_garment_tokens + self.pose_tokens
+
+    def launch_note(self) -> dict[str, Any]:
+        return {
+            'type': self.adapter_type,
+            'version': self.version,
+            'weight_path': self.weight_path,
+            'fallback_reason': self.fallback_reason,
+            'zero_init_gates': {
+                'identity': float(self.id_gate.detach().cpu()),
+                'appearance': float(self.appearance_gate.detach().cpu()),
+                'garment': float(self.garment_gate.detach().cpu()),
+                'head_pose': float(self.pose_gate.detach().cpu()),
+            },
+        }
 
     def forward(
         self,
@@ -201,14 +239,17 @@ class FluxIdentityAdapter(nn.Module):
         head_pose: torch.Tensor,
     ) -> torch.Tensor:
         b = identity.shape[0]
-        pieces = [
-            self.id_proj(identity).view(b, self.id_tokens, self.token_dim),
-            self.app_proj(appearance).view(b, self.appearance_tokens, self.token_dim),
-            self.garment_proj(garment).view(b, self.garment_tokens, self.token_dim),
-            self.pose_proj(head_pose).view(b, self.pose_tokens, self.token_dim),
-        ]
-        return self.dropout(self.norm(torch.cat(pieces, dim=1)))
-
+        id_tokens = self.id_proj(identity).view(b, self.id_tokens, self.token_dim) * self.id_gate
+        app_tokens = self.app_proj(appearance).view(b, self.appearance_tokens, self.token_dim) * self.appearance_gate
+        if garment.ndim == 2:
+            garment = garment.unsqueeze(1)
+        garment_tokens = self.garment_proj(garment)
+        if garment_tokens.shape[1] > self.max_garment_tokens:
+            garment_tokens = garment_tokens[:, : self.max_garment_tokens]
+        pos = self.garment_pos_embed[: garment_tokens.shape[1]].to(device=garment_tokens.device, dtype=garment_tokens.dtype)
+        garment_tokens = (garment_tokens + pos.unsqueeze(0)) * self.garment_gate
+        pose_tokens = self.pose_proj(head_pose).view(b, self.pose_tokens, self.token_dim) * self.pose_gate
+        return self.dropout(self.norm(torch.cat([id_tokens, app_tokens, garment_tokens, pose_tokens], dim=1)))
 
 def load_text_embeddings(base: str | Path, prompt: str, device: torch.device, dtype: torch.dtype, max_length: int = 512):
     base = Path(base)
@@ -263,6 +304,89 @@ def pooled_clip_feature(model, image: Image.Image, device: torch.device, dtype: 
     return pooled[0].float().cpu().numpy().astype('float32')
 
 
+def clip_patch_grid_feature(
+    model,
+    image: Image.Image,
+    device: torch.device,
+    dtype: torch.dtype,
+    max_tokens: int = 64,
+) -> np.ndarray:
+    tensor = pil_to_clip_tensor(image).unsqueeze(0).to(device=device, dtype=dtype)
+    with torch.no_grad():
+        out = model(pixel_values=tensor)
+        patches = out.last_hidden_state[:, 1:, :]
+    patches = patches[0].float().cpu()
+    n, dim = patches.shape
+    side = int(round(math.sqrt(n)))
+    if side * side == n and n > max_tokens:
+        stride = max(1, math.ceil(side / math.sqrt(max_tokens)))
+        patches = patches.view(side, side, dim)[::stride, ::stride].reshape(-1, dim)
+    elif n > max_tokens:
+        idx = torch.linspace(0, n - 1, max_tokens).round().long()
+        patches = patches[idx]
+    if patches.shape[0] > max_tokens:
+        patches = patches[:max_tokens]
+    return patches.numpy().astype('float32')
+
+
+def _best_face_bbox(image: Image.Image, model_root: str | Path, device_id: int = 0) -> tuple[float, float, float, float]:
+    try:
+        import insightface
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError('insightface is required for original-image face bbox detection') from exc
+    app = getattr(_best_face_bbox, '_app', None)
+    key = (str(model_root), int(device_id))
+    if app is None or getattr(_best_face_bbox, '_key', None) != key:
+        app = insightface.app.FaceAnalysis(name='antelopev2', root=str(model_root), providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+        app.prepare(ctx_id=device_id, det_size=(640, 640))
+        setattr(_best_face_bbox, '_app', app)
+        setattr(_best_face_bbox, '_key', key)
+    arr = np.asarray(image.convert('RGB'))[:, :, ::-1]
+    faces = app.get(arr)
+    if not faces:
+        raise RuntimeError('RetinaFace detector found no face on original image')
+    best = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+    return tuple(float(v) for v in best.bbox)
+
+
+def expanded_head_crop(
+    image: Image.Image,
+    bbox: tuple[float, float, float, float],
+    scale: float = 1.8,
+    upward_bias: float = 0.30,
+) -> Image.Image:
+    x0, y0, x1, y1 = bbox
+    w = max(1.0, x1 - x0)
+    h = max(1.0, y1 - y0)
+    cx = (x0 + x1) * 0.5
+    cy = (y0 + y1) * 0.5 - upward_bias * h
+    side = max(w, h) * scale
+    nx0 = max(0, int(round(cx - side * 0.5)))
+    nx1 = min(image.width, int(round(cx + side * 0.5)))
+    ny0 = max(0, int(round(cy - side * 0.5)))
+    ny1 = min(image.height, int(round(cy + side * 0.5)))
+    if nx1 <= nx0 or ny1 <= ny0:
+        return image.crop((0, 0, image.width, image.height))
+    return image.crop((nx0, ny0, nx1, ny1))
+
+
+def head_crop_from_original(
+    image: Image.Image,
+    model_root: str | Path,
+    device_id: int = 0,
+    image_path: str | Path | None = None,
+    helper_python: str | None = None,
+    helper_script: str | Path | None = None,
+) -> Image.Image:
+    try:
+        bbox = _best_face_bbox(image, model_root=model_root, device_id=device_id)
+    except RuntimeError:
+        if image_path is None or helper_python is None:
+            raise
+        bbox = face_bbox_from_path(image_path, helper_python=helper_python, helper_script=helper_script, model_root=model_root, device_id=device_id)
+    return expanded_head_crop(image, bbox)
+
+
 def arcface_embedding(face: Image.Image, model_root: str | Path = '/data/muxiangyu/modelLibrary/insightface') -> np.ndarray:
     try:
         import cv2
@@ -296,13 +420,13 @@ def _close_arcface_helpers() -> None:
 atexit.register(_close_arcface_helpers)
 
 
-def _arcface_embedding_via_server(
-    face_path: str | Path,
+def _arcface_server_request(
+    image_path: str | Path,
     helper_python: str,
     helper_script: str | Path,
     model_root: str | Path,
     device_id: int,
-) -> np.ndarray:
+) -> dict[str, Any]:
     key = (str(helper_python), str(helper_script), str(model_root), int(device_id))
     proc = _ARC_HELPERS.get(key)
     if proc is None or proc.poll() is not None:
@@ -317,7 +441,7 @@ def _arcface_embedding_via_server(
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
         _ARC_HELPERS[key] = proc
     assert proc.stdin is not None and proc.stdout is not None
-    proc.stdin.write(json.dumps({'image': str(face_path)}, ensure_ascii=False) + '\n')
+    proc.stdin.write(json.dumps({'image': str(image_path)}, ensure_ascii=False) + '\n')
     proc.stdin.flush()
     while True:
         line = proc.stdout.readline()
@@ -329,12 +453,39 @@ def _arcface_embedding_via_server(
             continue
         break
     if not payload.get('ok'):
-        raise RuntimeError(f'ArcFace helper server failed for {face_path}: {payload.get("error")}')
+        raise RuntimeError(f'ArcFace helper server failed for {image_path}: {payload.get("error")}')
+    return payload
+
+
+def _arcface_embedding_via_server(
+    face_path: str | Path,
+    helper_python: str,
+    helper_script: str | Path,
+    model_root: str | Path,
+    device_id: int,
+) -> np.ndarray:
+    payload = _arcface_server_request(face_path, helper_python, helper_script, model_root, device_id)
     emb = np.asarray(payload['embedding'], dtype='float32')
     if emb.shape != (512,):
         raise RuntimeError(f'ArcFace helper returned invalid shape {emb.shape}, expected (512,)')
     return emb
 
+
+def face_bbox_from_path(
+    image_path: str | Path,
+    helper_python: str,
+    helper_script: str | Path | None = None,
+    model_root: str | Path = '/data/muxiangyu/modelLibrary/insightface',
+    device_id: int = 0,
+) -> tuple[float, float, float, float]:
+    script = Path(helper_script or 'tools/arcface_embed_server.py')
+    if 'server' not in script.name:
+        raise RuntimeError('face bbox fallback requires the persistent arcface_embed_server helper')
+    payload = _arcface_server_request(image_path, helper_python, script, model_root, device_id)
+    bbox = payload.get('bbox')
+    if not bbox or len(bbox) != 4:
+        raise RuntimeError(f'ArcFace helper server returned no valid bbox for {image_path}')
+    return tuple(float(v) for v in bbox)
 
 def arcface_embedding_from_path(
     face_path: str | Path,

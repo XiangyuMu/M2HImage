@@ -32,11 +32,13 @@ dependencies = [
 dev = ["pytest", "ruff"]
 
 [tool.setuptools]
+packages = ["metrics"]
 py-modules = [
   "build_cache",
   "conditions",
   "dataset",
   "eval_b2",
+  "eval_b2_metrics",
   "eval_b2_local_metrics",
   "eval_b2_make_vis",
   "eval_watcher",

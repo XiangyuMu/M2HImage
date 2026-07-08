@@ -17,6 +17,7 @@ train_paired.py                  paired flow warmup training, 3-card DDP by defa
 eval_watcher.py                  checkpoint watcher with paired and identity-swap panels
 eval_b2.py                       frozen B2 subset/generation/report entry
 eval_b2_local_metrics.py         local generated-image proxy metrics
+eval_b2_metrics.py               official offline B2 metrics: held-out DeltaID, head-pose MAE, GarmentSim
 eval_b2_make_vis.py              B2 contact sheets
 scripts/sanity_flux_timestep.py  Fix 1 prompt-only FLUX timestep sanity check
 scripts/run_phase1_pipeline.sh   cache + training + watcher launch helper
@@ -53,8 +54,12 @@ bash scripts/run_phase1_pipeline.sh
 
 ```bash
 bash scripts/run_b2_generation.sh
+/home/muxiangyu/miniconda3/envs/imagdressing_m2h/bin/python eval_b2_metrics.py --config configs/warmup.yaml --subset eval/cf_subset.json --gen-dir eval/b2_gen --metrics all --device cuda:0
+# Optional local proxy report only, not the official A2 gate:
 /home/muxiangyu/miniconda3/envs/imagdressing_m2h/bin/python eval_b2_local_metrics.py --config configs/warmup.yaml --device cuda:3
 ```
+
+The official metric entry never regenerates images. Held-out DeltaID requires AdaFace IR-101 or CurricularFace; head-pose MAE requires the same 6DRepNet inference command used for dataset extraction. If either asset is missing, the runner writes a BLOCKED section and does not fall back to InsightFace or proxy metrics.
 
 ## Watcher Checks
 

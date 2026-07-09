@@ -88,7 +88,7 @@ def write_report(
         f"Held-out identity recognizer: {delta.get('recognizer', 'AdaFace IR-101')} | status={delta.get('status')} | hash={delta.get('checkpoint_hash', 'n/a')}",
         'Face detection/alignment for DeltaID uses InsightFace RetinaFace only; recognition uses the held-out recognizer when configured.',
         f"DINO garment encoder: {garment.get('dino', 'GSVTON vendored DINOv2 ViT-B/14')} | status={garment.get('status')} | hash={garment.get('dino_checkpoint_hash', 'n/a')}",
-        f"6DRepNet runner: {headpose.get('runner', 'not configured')} | status={headpose.get('status')} | hash={headpose.get('checkpoint_hash', 'n/a')}",
+        f"Head pose runner: {headpose.get('runner', 'not configured')} | status={headpose.get('status')} | hash={headpose.get('checkpoint_hash', 'n/a')}",
         f"Mask projection: {garment.get('mask_projection', 'source mid cloth_safe mask resized to generated frame')}",
         '',
         '## Held-out DeltaID',

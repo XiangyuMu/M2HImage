@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -71,6 +72,40 @@ class RetinaFaceAligner:
         aligned_rgb = cv2.cvtColor(aligned_bgr, cv2.COLOR_BGR2RGB)
         det_conf = float(getattr(face, 'det_score', 0.0))
         return aligned_rgb, face_size, det_conf
+
+
+def resize_face_crop_rgb(path: str | Path, image_size: int = 112) -> np.ndarray:
+    bgr = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    if bgr is None:
+        raise RuntimeError(f'failed to read image: {path}')
+    resized = cv2.resize(bgr, (int(image_size), int(image_size)), interpolation=cv2.INTER_CUBIC)
+    return cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+
+
+class UnifaceAdaFaceRecognizer:
+    def __init__(self, cache_dir: str | Path, checkpoint: str | Path, device: torch.device):
+        from uniface import set_cache_dir
+        from uniface.constants import AdaFaceWeights
+        from uniface.recognition import AdaFace
+
+        cache_dir = Path(cache_dir)
+        checkpoint = Path(checkpoint)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        os.environ['UNIFACE_CACHE_DIR'] = str(cache_dir)
+        set_cache_dir(str(cache_dir))
+        if not checkpoint.exists():
+            raise MetricUnavailable(f'UniFace AdaFace IR101 checkpoint not found: {checkpoint}. {MANUAL_ADAFACE}')
+        providers = ['CPUExecutionProvider']
+        if str(device).startswith('cuda'):
+            providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+        self.model = AdaFace(model_name=AdaFaceWeights.IR_101, providers=providers)
+        self.device = device
+
+    def embed_aligned_rgb(self, aligned_rgb: np.ndarray) -> np.ndarray:
+        aligned_bgr = cv2.cvtColor(aligned_rgb, cv2.COLOR_RGB2BGR)
+        emb = self.model.get_embedding(aligned_bgr, landmarks=None).reshape(-1).astype('float32')
+        norm = np.linalg.norm(emb)
+        return emb / norm if norm > 0 else emb
 
 
 class AdaFaceRecognizer:
@@ -164,10 +199,20 @@ def run_deltaid(
     repo = Path(mcfg.get('repo', ''))
     checkpoint = Path(mcfg.get('checkpoint', ''))
     try:
-        if not str(repo) or not str(checkpoint):
-            raise MetricUnavailable(f'AdaFace repo/checkpoint are not configured. {MANUAL_ADAFACE}')
+        if not str(checkpoint):
+            raise MetricUnavailable(f'AdaFace checkpoint is not configured. {MANUAL_ADAFACE}')
         torch_device = torch.device(device if torch.cuda.is_available() or not str(device).startswith('cuda') else 'cpu')
-        recognizer = AdaFaceRecognizer(repo, checkpoint, torch_device, architecture=mcfg.get('architecture', 'ir_101'))
+        recognizer_name = str(mcfg.get('recognizer', 'adaface_ir101')).lower()
+        if recognizer_name in {'uniface_adaface_ir101', 'uniface_adaface_ir_101'}:
+            recognizer = UnifaceAdaFaceRecognizer(
+                cache_dir=mcfg.get('cache_dir', checkpoint.parent),
+                checkpoint=checkpoint,
+                device=torch_device,
+            )
+        else:
+            if not str(repo):
+                raise MetricUnavailable(f'AdaFace repo is not configured. {MANUAL_ADAFACE}')
+            recognizer = AdaFaceRecognizer(repo, checkpoint, torch_device, architecture=mcfg.get('architecture', 'ir_101'))
         detector = RetinaFaceAligner(
             model_root=mcfg.get('detector_model_root', cfg.get('cache', {}).get('arcface_model_root', '/data/muxiangyu/modelLibrary/insightface')),
             device_id=int(mcfg.get('detector_device_id', 0 if str(torch_device).startswith('cuda') else -1)),
@@ -191,7 +236,16 @@ def run_deltaid(
             raise RuntimeError(ref_errors[sample_id])
         try:
             face_path = find_one(root / 'derived/face_crops/human', sample_id)
-            aligned, _, _ = detector.align(face_path, expand=float(mcfg.get('ref_expand', 1.1)), min_crop=int(mcfg.get('min_crop_px', 256)))
+            try:
+                aligned, _, _ = detector.align(
+                    face_path,
+                    expand=float(mcfg.get('ref_expand', 1.1)),
+                    min_crop=int(mcfg.get('min_crop_px', 256)),
+                )
+            except RuntimeError as exc:
+                if 'found no face' not in str(exc):
+                    raise
+                aligned = resize_face_crop_rgb(face_path)
             refs[sample_id] = recognizer.embed_aligned_rgb(aligned)
             return refs[sample_id]
         except Exception as exc:  # noqa: BLE001
@@ -252,7 +306,7 @@ def run_deltaid(
     ok_rows = [row for row in csv_rows if row['status'] == 'ok']
     summary = {
         'status': 'ok',
-        'recognizer': 'AdaFace IR-101',
+        'recognizer': 'UniFace AdaFace IR-101 ONNX' if str(mcfg.get('recognizer', '')).lower().startswith('uniface') else 'AdaFace IR-101',
         'repo': str(repo),
         'checkpoint': str(checkpoint),
         'checkpoint_hash': sha256_short(checkpoint),

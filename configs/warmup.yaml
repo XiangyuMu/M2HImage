@@ -94,9 +94,10 @@ eval:
 metrics:
   output_dir: eval/metrics
   heldout_id:
-    recognizer: adaface_ir101
-    repo: /data/muxiangyu/pythonPrograms/AdaFace
-    checkpoint: /data/muxiangyu/modelLibrary/AdaFace/adaface_ir101_webface12m.ckpt
+    recognizer: uniface_adaface_ir101
+    repo: /data/muxiangyu/modelLibrary/uniface
+    checkpoint: /data/muxiangyu/modelLibrary/uniface/adaface_ir_101.onnx
+    cache_dir: /data/muxiangyu/modelLibrary/uniface
     architecture: ir_101
     detector_model_root: /data/muxiangyu/modelLibrary/insightface
     det_size: 640
@@ -104,9 +105,10 @@ metrics:
     ref_expand: 1.1
     min_crop_px: 256
   headpose:
-    runner: 6drepnet
+    runner: uniface_headpose
     command: null
-    checkpoint: null
+    checkpoint: /data/muxiangyu/modelLibrary/uniface/headpose_resnet18.onnx
+    cache_dir: /data/muxiangyu/modelLibrary/uniface
   garment:
     dino: gsvton_dinov2_vitb14
     dino_repo_root: /data/muxiangyu/pythonPrograms/GSVTON

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import subprocess
 from pathlib import Path
 from typing import Any
 
+import cv2
+import numpy as np
 from tqdm import tqdm
 
 from metrics.common import (
@@ -19,6 +22,71 @@ MANUAL_6DREPNET = (
     'print JSON containing yaw, pitch, roll, status, det_confidence, and face_size_px for one image. Template variables: '
     '{image}, {device}, {checkpoint}. Example: python path/to/run_6drepnet_one.py --image {image} --device {device}.'
 )
+
+
+class UnifaceHeadPoseRunner:
+    def __init__(self, cache_dir: str | Path, checkpoint: str | Path, providers: list[str] | None = None):
+        from uniface import set_cache_dir
+        from uniface.constants import HeadPoseWeights
+        from uniface.headpose import HeadPose
+
+        cache_dir = Path(cache_dir)
+        checkpoint = Path(checkpoint)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        os.environ['UNIFACE_CACHE_DIR'] = str(cache_dir)
+        set_cache_dir(str(cache_dir))
+        if not checkpoint.exists():
+            raise MetricUnavailable(f'UniFace headpose checkpoint not found: {checkpoint}. {MANUAL_6DREPNET}')
+        self.model = HeadPose(model_name=HeadPoseWeights.RESNET18, providers=providers or ['CPUExecutionProvider'])
+        self.det_conf_key = 'det_confidence'
+
+    @staticmethod
+    def _crop_largest_face(path: str | Path) -> tuple[np.ndarray, float, float]:
+        import insightface
+
+        bgr = cv2.imread(str(path), cv2.IMREAD_COLOR)
+        if bgr is None:
+            raise RuntimeError(f'failed to read image: {path}')
+        app = getattr(UnifaceHeadPoseRunner, '_detector', None)
+        if app is None:
+            app = insightface.app.FaceAnalysis(
+                name='antelopev2',
+                root='/data/muxiangyu/modelLibrary/insightface',
+                providers=['CUDAExecutionProvider', 'CPUExecutionProvider'],
+            )
+            app.prepare(ctx_id=0, det_size=(640, 640))
+            UnifaceHeadPoseRunner._detector = app
+        faces = app.get(bgr)
+        if not faces:
+            raise RuntimeError('RetinaFace found no face')
+        face = max(faces, key=lambda f: (float(f.bbox[2]) - float(f.bbox[0])) * (float(f.bbox[3]) - float(f.bbox[1])))
+        x0, y0, x1, y1 = [float(v) for v in face.bbox]
+        w = max(1.0, x1 - x0)
+        h = max(1.0, y1 - y0)
+        face_size = max(w, h)
+        cx = (x0 + x1) * 0.5
+        cy = (y0 + y1) * 0.5
+        side = max(w, h) * 1.3
+        ix0 = max(0, int(round(cx - side * 0.5)))
+        ix1 = min(bgr.shape[1], int(round(cx + side * 0.5)))
+        iy0 = max(0, int(round(cy - side * 0.5)))
+        iy1 = min(bgr.shape[0], int(round(cy + side * 0.5)))
+        crop = bgr[iy0:iy1, ix0:ix1]
+        if crop.size == 0:
+            raise RuntimeError('expanded face crop is empty')
+        return crop, face_size, float(getattr(face, 'det_score', 0.0))
+
+    def predict(self, image: str | Path) -> dict[str, Any]:
+        crop, face_size, det_conf = self._crop_largest_face(image)
+        result = self.model.estimate(crop)
+        return {
+            'status': 'ok',
+            'yaw': float(result.yaw),
+            'pitch': float(result.pitch),
+            'roll': float(result.roll),
+            'det_confidence': det_conf,
+            'face_size_px': face_size,
+        }
 
 
 class External6DRepNetRunner:
@@ -88,11 +156,22 @@ def run_headpose_mae(
     out_dir.mkdir(parents=True, exist_ok=True)
     mcfg = _metric_cfg(cfg)
     try:
-        runner = External6DRepNetRunner(
-            command=str(mcfg.get('command') or ''),
-            checkpoint=str(mcfg.get('checkpoint') or ''),
-            device=device,
-        )
+        runner_name = str(mcfg.get('runner') or '').lower()
+        if runner_name == 'uniface_headpose':
+            providers = ['CPUExecutionProvider']
+            if str(device).startswith('cuda'):
+                providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+            runner = UnifaceHeadPoseRunner(
+                cache_dir=mcfg.get('cache_dir', Path(str(mcfg.get('checkpoint') or '')).parent),
+                checkpoint=str(mcfg.get('checkpoint') or ''),
+                providers=providers,
+            )
+        else:
+            runner = External6DRepNetRunner(
+                command=str(mcfg.get('command') or ''),
+                checkpoint=str(mcfg.get('checkpoint') or ''),
+                device=device,
+            )
     except MetricUnavailable as exc:
         summary = _blocked_summary(out_dir, str(exc), cfg)
         if fail_on_unavailable:
@@ -163,10 +242,10 @@ def run_headpose_mae(
     plot_histogram(out_dir / 'headpose_yaw_abs_err_hist.png', [row.get('yaw_abs_err') for row in ok_rows], 'Head Pose Yaw MAE', '|generated yaw - target yaw|')
     summary = {
         'status': 'ok',
-        'runner': mcfg.get('command'),
+        'runner': mcfg.get('runner') or mcfg.get('command'),
         'checkpoint': str(mcfg.get('checkpoint', '')),
         'checkpoint_hash': sha256_short(mcfg.get('checkpoint')),
-        'angle_convention': 'yaw/pitch/roll folded into (-90, 90], matching derived/head_pose_6drepnet acceptance report',
+        'angle_convention': 'generated head pose from configured runner; target yaw/pitch/roll from derived/head_pose_6drepnet; errors folded into (-90, 90]',
         'count': len(ok_rows),
         'failed': len(csv_rows) - len(ok_rows),
         'yaw_mae_mean': safe_mean([row.get('yaw_abs_err') for row in ok_rows]),

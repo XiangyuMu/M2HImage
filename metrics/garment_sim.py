@@ -13,7 +13,7 @@ import torch
 from PIL import Image
 from tqdm import tqdm
 
-from conditions import find_one
+from conditions import find_one, get_resolution
 from metrics.common import cosine, expected_rows, plot_histogram, safe_mean, safe_median, sha256_short, write_csv, write_json
 
 
@@ -48,7 +48,7 @@ def load_dino_model(cfg: dict[str, Any], device: torch.device):
     return model
 
 
-def cloth_safe_mask(root: Path, sample_id: str, size: int) -> np.ndarray:
+def cloth_safe_mask(root: Path, sample_id: str, resolution) -> np.ndarray:
     mask_path = root / 'derived/region_masks' / f'{sample_id}.npz'
     if not mask_path.exists():
         raise FileNotFoundError(f'cloth_safe region mask missing: {mask_path}')
@@ -56,17 +56,19 @@ def cloth_safe_mask(root: Path, sample_id: str, size: int) -> np.ndarray:
     if 'cloth_safe' not in data.files:
         raise KeyError(f'{mask_path} has no cloth_safe key')
     mask = (np.asarray(data['cloth_safe']) > 127).astype(np.uint8) * 255
-    pil = Image.fromarray(mask, mode='L').resize((size, size), Image.Resampling.NEAREST)
+    width, height = get_resolution(resolution)
+    pil = Image.fromarray(mask, mode='L').resize((width, height), Image.Resampling.NEAREST)
     arr = (np.asarray(pil) > 127).astype(np.uint8)
     if arr.sum() < 64:
         raise RuntimeError(f'cloth_safe mask too small for {sample_id}')
     return arr
 
 
-def read_rgb(path: str | Path, size: int) -> np.ndarray:
+def read_rgb(path: str | Path, resolution) -> np.ndarray:
+    width, height = get_resolution(resolution)
     image = Image.open(path).convert('RGB')
-    if image.size != (size, size):
-        image = image.resize((size, size), Image.Resampling.BICUBIC)
+    if image.size != (width, height):
+        image = image.resize((width, height), Image.Resampling.BICUBIC)
     return np.asarray(image, dtype=np.uint8)
 
 
@@ -140,7 +142,7 @@ def lpips_tensor(image: np.ndarray, device: torch.device) -> torch.Tensor:
     return torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0).to(device)
 
 
-def compute_lpips_ssim(rows_by_mid: dict[str, list[dict[str, Any]]], masks: dict[str, np.ndarray], size: int, device: torch.device) -> dict[str, Any]:
+def compute_lpips_ssim(rows_by_mid: dict[str, list[dict[str, Any]]], masks: dict[str, np.ndarray], resolution, device: torch.device) -> dict[str, Any]:
     try:
         from skimage.metrics import structural_similarity
     except Exception:
@@ -156,7 +158,7 @@ def compute_lpips_ssim(rows_by_mid: dict[str, list[dict[str, Any]]], masks: dict
     pair_count = 0
     with torch.no_grad():
         for mid, items in rows_by_mid.items():
-            crops = {row['path']: masked_crop(read_rgb(row['path'], size=size), masks[mid]) for row in items}
+            crops = {row['path']: masked_crop(read_rgb(row['path'], resolution), masks[mid]) for row in items}
             for a, b in combinations(items, 2):
                 ia = crops[a['path']]
                 ib = crops[b['path']]
@@ -187,7 +189,7 @@ def run_garment_sim(
     out_dir.mkdir(parents=True, exist_ok=True)
     mcfg = _metric_cfg(cfg)
     root = Path(cfg['data']['root'])
-    size = int(cfg['data']['resolution'])
+    resolution = cfg['data']['resolution']
     dino_size = int(mcfg.get('dino_image_size', 518))
     mask_out_value = float(mcfg.get('mask_out_value', 0.5))
     torch_device = torch.device(device if torch.cuda.is_available() or not str(device).startswith('cuda') else 'cpu')
@@ -202,10 +204,10 @@ def run_garment_sim(
     features: dict[str, np.ndarray] = {}
     feature_rows: list[dict[str, Any]] = []
     for mid, items in tqdm(sorted(by_mid.items()), desc='DINO garment features'):
-        masks[mid] = cloth_safe_mask(root, mid, size)
+        masks[mid] = cloth_safe_mask(root, mid, resolution)
         for row in items:
             try:
-                image = read_rgb(row['path'], size=size)
+                image = read_rgb(row['path'], resolution)
                 feat = dino_region_feature(model, image, masks[mid], torch_device, dino_size, mask_out_value)
                 key = str(row['path'])
                 features[key] = feat
@@ -243,7 +245,7 @@ def run_garment_sim(
     for mid, items in tqdm(sorted(by_mid.items()), desc='DINO source garment'):
         try:
             source_path = find_one(root / 'images/human', mid)
-            source_image = read_rgb(source_path, size=size)
+            source_image = read_rgb(source_path, resolution)
             source_features[mid] = dino_region_feature(model, source_image, masks[mid], torch_device, dino_size, mask_out_value)
             for row in items:
                 feat = features.get(str(row['path']))
@@ -262,7 +264,7 @@ def run_garment_sim(
         except Exception as exc:  # noqa: BLE001
             source_rows.append({'mid': mid, 'status': 'failed', 'error': str(exc)})
 
-    aux = compute_lpips_ssim(by_mid, masks, size, torch_device)
+    aux = compute_lpips_ssim(by_mid, masks, resolution, torch_device)
     write_csv(out_dir / 'garment_features.csv', feature_rows, ['mid', 'jid', 'seed', 'garment_type', 'theta_source', 'path', 'status', 'error'])
     write_csv(out_dir / 'garment_pairwise_dino.csv', pair_rows, ['mid', 'path_a', 'path_b', 'jid_a', 'jid_b', 'seed_a', 'seed_b', 'dino_cosine'])
     write_csv(out_dir / 'garment_source_dino.csv', source_rows, ['mid', 'jid', 'seed', 'path', 'source_path', 'dino_source_cosine', 'status', 'error'])
@@ -275,7 +277,7 @@ def run_garment_sim(
         'dino_repo_root': str(mcfg.get('dino_repo_root', '/data/muxiangyu/pythonPrograms/GSVTON')),
         'dino_checkpoint': str(mcfg.get('dino_checkpoint', '/data/muxiangyu/pythonPrograms/GSVTON/pretrained/dinov2_vitb14_pretrain.pth')),
         'dino_checkpoint_hash': sha256_short(mcfg.get('dino_checkpoint', '/data/muxiangyu/pythonPrograms/GSVTON/pretrained/dinov2_vitb14_pretrain.pth')),
-        'mask_projection': 'source mid derived/region_masks/{mid}.npz cloth_safe resized to generated 512 frame; mask outside set to gray before DINO',
+        'mask_projection': 'source mid derived/region_masks/{mid}.npz cloth_safe resized to configured generated frame; mask outside set to gray before DINO',
         'dino_image_size': dino_size,
         'mask_out_value': mask_out_value,
         'generated_images': len(rows),

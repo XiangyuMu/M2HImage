@@ -88,8 +88,23 @@ def assert_real_controlnet(path: str | Path) -> dict[str, Any]:
     return {'path': str(path), 'config_hash': sha256_file(cfg)[:16], 'weight_hash': sha256_file(weight)[:16], 'config': payload}
 
 
-def pil_to_tensor(image: Image.Image, resolution: int) -> torch.Tensor:
-    image = image.convert('RGB').resize((resolution, resolution), Image.Resampling.BICUBIC)
+def get_resolution(value: Any) -> tuple[int, int]:
+    if isinstance(value, dict):
+        return int(value['width']), int(value['height'])
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        return int(value[0]), int(value[1])
+    size = int(value)
+    return size, size
+
+
+def resolution_tag(value: Any) -> str:
+    width, height = get_resolution(value)
+    return f'{width}x{height}'
+
+
+def pil_to_tensor(image: Image.Image, resolution: Any) -> torch.Tensor:
+    width, height = get_resolution(resolution)
+    image = image.convert('RGB').resize((width, height), Image.Resampling.BICUBIC)
     arr = np.asarray(image, dtype=np.float32) / 127.5 - 1.0
     return torch.from_numpy(arr).permute(2, 0, 1).contiguous()
 
@@ -141,9 +156,16 @@ def load_head_pose_token(root: Path, sample_id: str, dropout_p: float = 0.0, rng
     return np.asarray(vals, dtype=np.float32)
 
 
-def make_image_ids(resolution: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
-    h = resolution // 16
-    w = resolution // 16
+def make_image_ids(width: Any, height: int | None = None, device: torch.device | None = None, dtype: torch.dtype | None = None) -> torch.Tensor:
+    if height is not None and not isinstance(height, int):
+        # Backward-compatible call style: make_image_ids(resolution, device, dtype).
+        device, dtype = height, device
+        width, height = get_resolution(width)
+    elif height is None:
+        width, height = get_resolution(width)
+    assert device is not None and dtype is not None
+    h = int(height) // 16
+    w = int(width) // 16
     rows = torch.arange(h, device=device, dtype=dtype)
     cols = torch.arange(w, device=device, dtype=dtype)
     gy, gx = torch.meshgrid(rows, cols, indexing='ij')
@@ -159,45 +181,64 @@ def pack_latents(latents: torch.Tensor) -> torch.Tensor:
     return latents.view(b, c, h // 2, 2, w // 2, 2).permute(0, 2, 4, 1, 3, 5).reshape(b, (h // 2) * (w // 2), c * 4)
 
 
-def unpack_latents(tokens: torch.Tensor, resolution: int) -> torch.Tensor:
+def unpack_latents(tokens: torch.Tensor, width: Any, height: int | None = None) -> torch.Tensor:
+    width, height = get_resolution(width) if height is None else (int(width), int(height))
     b, n, c = tokens.shape
-    h = resolution // 8
-    w = resolution // 8
+    h = int(height) // 8
+    w = int(width) // 8
+    expected = (h // 2) * (w // 2)
+    if n != expected:
+        raise RuntimeError(f'packed latent token count mismatch: got {n}, expected {expected} for {width}x{height}')
     return tokens.view(b, h // 2, w // 2, c // 4, 2, 2).permute(0, 3, 1, 4, 2, 5).reshape(b, c // 4, h, w)
 
 
-class FluxIdentityAdapter(nn.Module):
-    """Fallback FLUX identity/condition token adapter with zero-init gates.
+class FluxConditionAdapter(nn.Module):
+    """Trainable non-identity condition token adapter.
 
-    No local PuLID-FLUX or InfiniteYou implementation/weights were found in this environment, so
-    Phase 1 uses the explicitly documented fallback: projection tokens with per-route zero gates.
-    The fallback changes the A9 ablation premise and must be replaced with a mature adapter when
-    PuLID/InfiniteYou assets are available.
+    Identity injection is handled only by frozen pretrained PuLID-FLUX. This module keeps the
+    appearance, garment-grid, and head-pose token routes and exposes learnable scalar gates.
     """
 
     def __init__(self, cfg: dict[str, Any]) -> None:
         super().__init__()
         token_dim = int(cfg.get('token_dim', 4096))
-        self.id_tokens = int(cfg.get('id_tokens', 4))
         self.appearance_tokens = int(cfg.get('appearance_tokens', 4))
         self.pose_tokens = int(cfg.get('pose_tokens', 1))
         self.max_garment_tokens = int(cfg.get('garment_grid_max_tokens', cfg.get('garment_tokens', 64)))
-        self.adapter_type = str(cfg.get('type', 'flux_projection_fallback_zero_gated'))
-        self.version = str(cfg.get('version', 'unknown'))
-        self.fallback_reason = str(cfg.get('fallback_reason', 'local mature FLUX identity adapter not configured'))
-        self.weight_path = str(cfg.get('weight_path', 'none'))
-        self.id_proj = nn.Sequential(nn.Linear(int(cfg.get('id_dim', 512)), token_dim * self.id_tokens), nn.SiLU())
+        self.adapter_type = str(cfg.get('type', 'condition_tokens'))
+        self.version = str(cfg.get('version', 'phase1-condition-tokens'))
+        gate_init = float(cfg.get('gate_init', 0.1))
         self.app_proj = nn.Sequential(nn.Linear(int(cfg.get('appearance_dim', 1024)), token_dim * self.appearance_tokens), nn.SiLU())
         self.garment_proj = nn.Linear(int(cfg.get('garment_grid_dim', cfg.get('garment_dim', 1024))), token_dim)
         self.pose_proj = nn.Sequential(nn.Linear(7, token_dim * self.pose_tokens), nn.SiLU())
-        self.id_gate = nn.Parameter(torch.zeros(()))
-        self.appearance_gate = nn.Parameter(torch.zeros(()))
-        self.garment_gate = nn.Parameter(torch.zeros(()))
-        self.pose_gate = nn.Parameter(torch.zeros(()))
+        self.appearance_gate = nn.Parameter(torch.tensor(gate_init, dtype=torch.float32))
+        self.garment_gate = nn.Parameter(torch.tensor(gate_init, dtype=torch.float32))
+        self.pose_gate = nn.Parameter(torch.tensor(gate_init, dtype=torch.float32))
         self.norm = nn.LayerNorm(token_dim)
         self.dropout = nn.Dropout(float(cfg.get('dropout', 0.0)))
         self.token_dim = token_dim
         self.register_buffer('garment_pos_embed', self._make_2d_pos_embed(self.max_garment_tokens, token_dim), persistent=False)
+
+    def keep_gates_fp32(self) -> None:
+        """Keep scalar gates out of bf16 parameter quantization."""
+        for name in ('appearance_gate', 'garment_gate', 'pose_gate'):
+            param = getattr(self, name)
+            if param.dtype != torch.float32:
+                param.data = param.data.float()
+            if param.grad is not None and param.grad.dtype != torch.float32:
+                param.grad.data = param.grad.data.float()
+
+    def to_compute(self, device: torch.device, dtype: torch.dtype) -> 'FluxConditionAdapter':
+        # Move only projection/norm compute weights to bf16. Scalar gates never pass through
+        # bf16, so gate_init=0.1 remains exactly represented in fp32.
+        self.to(device=device)
+        self.app_proj.to(dtype=dtype)
+        self.garment_proj.to(dtype=dtype)
+        self.pose_proj.to(dtype=dtype)
+        self.norm.to(dtype=dtype)
+        self.garment_pos_embed = self.garment_pos_embed.to(device=device, dtype=dtype)
+        self.keep_gates_fp32()
+        return self
 
     @staticmethod
     def _make_2d_pos_embed(token_count: int, dim: int) -> torch.Tensor:
@@ -215,41 +256,64 @@ class FluxIdentityAdapter(nn.Module):
 
     @property
     def token_count(self) -> int:
-        return self.id_tokens + self.appearance_tokens + self.max_garment_tokens + self.pose_tokens
+        return self.appearance_tokens + self.max_garment_tokens + self.pose_tokens
+
+    def _gate(self, value: torch.Tensor) -> torch.Tensor:
+        return torch.clamp(value.float(), -1.0, 1.0)
+
+    def _apply_gate(self, tokens: torch.Tensor, value: torch.Tensor) -> torch.Tensor:
+        # Gating before LayerNorm is scale-invariant and gives the scalar almost no useful
+        # gradient. Multiply after normalization in fp32, then return the model compute dtype.
+        return (tokens.float() * self._gate(value)).to(dtype=tokens.dtype)
+
+    def gate_values(self) -> dict[str, float]:
+        return {
+            'appearance_gate': float(torch.clamp(self.appearance_gate.detach().float(), -1.0, 1.0).cpu()),
+            'garment_gate': float(torch.clamp(self.garment_gate.detach().float(), -1.0, 1.0).cpu()),
+            'head_pose_gate': float(torch.clamp(self.pose_gate.detach().float(), -1.0, 1.0).cpu()),
+        }
 
     def launch_note(self) -> dict[str, Any]:
         return {
             'type': self.adapter_type,
             'version': self.version,
-            'weight_path': self.weight_path,
-            'fallback_reason': self.fallback_reason,
-            'zero_init_gates': {
-                'identity': float(self.id_gate.detach().cpu()),
-                'appearance': float(self.appearance_gate.detach().cpu()),
-                'garment': float(self.garment_gate.detach().cpu()),
-                'head_pose': float(self.pose_gate.detach().cpu()),
-            },
+            'identity_route': 'disabled; handled by pretrained PuLID-FLUX only',
+            'gate_order': 'post_layernorm',
+            'gate_dtype': str(self.appearance_gate.dtype),
+            'gates': self.gate_values(),
         }
 
     def forward(
         self,
-        identity: torch.Tensor,
         appearance: torch.Tensor,
         garment: torch.Tensor,
         head_pose: torch.Tensor,
     ) -> torch.Tensor:
-        b = identity.shape[0]
-        id_tokens = self.id_proj(identity).view(b, self.id_tokens, self.token_dim) * self.id_gate
-        app_tokens = self.app_proj(appearance).view(b, self.appearance_tokens, self.token_dim) * self.appearance_gate
+        b = appearance.shape[0]
+        app_tokens = self.app_proj(appearance).view(b, self.appearance_tokens, self.token_dim)
         if garment.ndim == 2:
             garment = garment.unsqueeze(1)
         garment_tokens = self.garment_proj(garment)
         if garment_tokens.shape[1] > self.max_garment_tokens:
             garment_tokens = garment_tokens[:, : self.max_garment_tokens]
         pos = self.garment_pos_embed[: garment_tokens.shape[1]].to(device=garment_tokens.device, dtype=garment_tokens.dtype)
-        garment_tokens = (garment_tokens + pos.unsqueeze(0)) * self.garment_gate
-        pose_tokens = self.pose_proj(head_pose).view(b, self.pose_tokens, self.token_dim) * self.pose_gate
-        return self.dropout(self.norm(torch.cat([id_tokens, app_tokens, garment_tokens, pose_tokens], dim=1)))
+        garment_tokens = garment_tokens + pos.unsqueeze(0)
+        pose_tokens = self.pose_proj(head_pose).view(b, self.pose_tokens, self.token_dim)
+
+        garment_count = garment_tokens.shape[1]
+        normalized = self.norm(torch.cat([app_tokens, garment_tokens, pose_tokens], dim=1))
+        app_tokens, garment_tokens, pose_tokens = torch.split(
+            normalized,
+            [self.appearance_tokens, garment_count, self.pose_tokens],
+            dim=1,
+        )
+        gated = torch.cat([
+            self._apply_gate(app_tokens, self.appearance_gate),
+            self._apply_gate(garment_tokens, self.garment_gate),
+            self._apply_gate(pose_tokens, self.pose_gate),
+        ], dim=1)
+        return self.dropout(gated)
+
 
 def load_text_embeddings(base: str | Path, prompt: str, device: torch.device, dtype: torch.dtype, max_length: int = 512):
     base = Path(base)
@@ -329,6 +393,17 @@ def clip_patch_grid_feature(
     return patches.numpy().astype('float32')
 
 
+
+def insightface_providers(prefer_cuda: bool = True) -> list[str]:
+    try:
+        import onnxruntime as ort
+        available = set(ort.get_available_providers())
+    except Exception:
+        available = set()
+    if prefer_cuda and 'CUDAExecutionProvider' in available:
+        return ['CUDAExecutionProvider', 'CPUExecutionProvider']
+    return ['CPUExecutionProvider']
+
 def _best_face_bbox(image: Image.Image, model_root: str | Path, device_id: int = 0) -> tuple[float, float, float, float]:
     try:
         import insightface
@@ -337,7 +412,7 @@ def _best_face_bbox(image: Image.Image, model_root: str | Path, device_id: int =
     app = getattr(_best_face_bbox, '_app', None)
     key = (str(model_root), int(device_id))
     if app is None or getattr(_best_face_bbox, '_key', None) != key:
-        app = insightface.app.FaceAnalysis(name='antelopev2', root=str(model_root), providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+        app = insightface.app.FaceAnalysis(name='antelopev2', root=str(model_root), providers=insightface_providers(prefer_cuda=device_id >= 0))
         app.prepare(ctx_id=device_id, det_size=(640, 640))
         setattr(_best_face_bbox, '_app', app)
         setattr(_best_face_bbox, '_key', key)
@@ -395,7 +470,7 @@ def arcface_embedding(face: Image.Image, model_root: str | Path = '/data/muxiang
         raise RuntimeError('insightface/opencv are required for real identity cache; no mock fallback allowed') from exc
     app = getattr(arcface_embedding, '_app', None)
     if app is None:
-        app = insightface.app.FaceAnalysis(name='antelopev2', root=str(model_root), providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+        app = insightface.app.FaceAnalysis(name='antelopev2', root=str(model_root), providers=insightface_providers(prefer_cuda=True))
         app.prepare(ctx_id=0, det_size=(224, 224))
         setattr(arcface_embedding, '_app', app)
     arr = np.asarray(face.convert('RGB'))[:, :, ::-1]

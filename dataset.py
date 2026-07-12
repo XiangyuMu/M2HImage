@@ -10,10 +10,10 @@ from torch.utils.data import Dataset, DistributedSampler
 
 from conditions import read_ids
 
-CACHE_KEYS = (
-    'target_latents', 'pose_latents', 'prompt_embeds', 'pooled_prompt_embeds',
-    'identity', 'appearance', 'garment_grid', 'head_pose'
+SAMPLE_CACHE_KEYS = (
+    'target_latents', 'pose_latents', 'pulid_id_embed', 'appearance', 'garment_grid', 'head_pose'
 )
+TEXT_CACHE_KEYS = ('prompt_embeds', 'pooled_prompt_embeds')
 
 
 class PairedWarmupDataset(Dataset):
@@ -37,15 +37,35 @@ class PairedWarmupDataset(Dataset):
 
     def assert_coverage(self) -> None:
         missing = []
+        bad = []
         for sid in self.ids:
             path = self.sample_path(sid)
             if not path.exists():
                 missing.append(str(path))
+                continue
+            try:
+                with np.load(path, mmap_mode='r') as row:
+                    absent = [key for key in SAMPLE_CACHE_KEYS if key not in row.files]
+                    if absent:
+                        bad.append(f'{path}: missing keys {absent}')
+            except Exception as exc:  # noqa: BLE001
+                bad.append(f'{path}: unreadable cache ({exc})')
         if not self.prompt_cache.exists():
             missing.append(str(self.prompt_cache))
-        if missing:
-            preview = '\n'.join(missing[:20])
-            raise RuntimeError(f'Phase 1 cache coverage is not 100%; missing {len(missing)} files, first entries:\n{preview}')
+        else:
+            try:
+                with np.load(self.prompt_cache, mmap_mode='r') as text:
+                    absent = [key for key in TEXT_CACHE_KEYS if key not in text.files]
+                    if absent:
+                        bad.append(f'{self.prompt_cache}: missing keys {absent}')
+            except Exception as exc:  # noqa: BLE001
+                bad.append(f'{self.prompt_cache}: unreadable prompt cache ({exc})')
+        if missing or bad:
+            preview = '\n'.join((missing + bad)[:20])
+            raise RuntimeError(
+                f'Phase 1 cache coverage is not 100%; missing_files={len(missing)} bad_files={len(bad)}, '
+                f'first entries:\n{preview}'
+            )
 
     def __getitem__(self, index: int) -> dict[str, Any]:
         sid = self.ids[index]
@@ -56,7 +76,6 @@ class PairedWarmupDataset(Dataset):
         if self.head_pose_dropout > 0.0 and torch.rand(()) < self.head_pose_dropout:
             head_pose = torch.zeros_like(head_pose)
             dropped = True
-        garment_key = 'garment_grid' if 'garment_grid' in row.files else 'garment'
         item = {
             'index': torch.tensor(index, dtype=torch.long),
             'sample_id': sid,
@@ -64,9 +83,9 @@ class PairedWarmupDataset(Dataset):
             'pose_latents': torch.from_numpy(np.asarray(row['pose_latents'])).float(),
             'prompt_embeds': torch.from_numpy(np.asarray(text['prompt_embeds'])).float(),
             'pooled_prompt_embeds': torch.from_numpy(np.asarray(text['pooled_prompt_embeds'])).float(),
-            'identity': torch.from_numpy(np.asarray(row['identity'])).float(),
+            'pulid_id_embed': torch.from_numpy(np.asarray(row['pulid_id_embed'])).float(),
             'appearance': torch.from_numpy(np.asarray(row['appearance'])).float(),
-            'garment': torch.from_numpy(np.asarray(row[garment_key])).float(),
+            'garment': torch.from_numpy(np.asarray(row['garment_grid'])).float(),
             'head_pose': head_pose,
             'head_pose_is_null': torch.tensor(dropped or bool(torch.all(head_pose == 0)), dtype=torch.float32),
         }

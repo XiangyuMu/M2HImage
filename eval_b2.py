@@ -189,7 +189,7 @@ def make_cf_batch(cache: Path, text_cache: Path, mannequin_id: str, identity_id:
     text = np.load(text_cache)
     return {
         'pose_latents': torch.from_numpy(np.asarray(m['pose_latents'])).float(),
-        'identity': torch.from_numpy(np.asarray(j['identity'])).float(),
+        'pulid_id_embed': torch.from_numpy(np.asarray(j['pulid_id_embed'])).float(),
         'appearance': torch.from_numpy(np.asarray(j['appearance'])).float(),
         'garment': torch.from_numpy(np.asarray(m['garment_grid'] if 'garment_grid' in m.files else m['garment'])).float(),
         'head_pose': torch.from_numpy(np.asarray(m['head_pose'])).float(),
@@ -213,10 +213,10 @@ def generate_b2(cfg: dict, ckpt: Path, subset: dict, device: str, overwrite: boo
     seed_everything(int(cfg['experiment']['seed']))
     torch_device = torch.device(device)
     dtype = choose_dtype(cfg['model']['precision'])
-    transformer, controlnet, vae, adapter, _ = load_components(cfg, torch_device, dtype)
+    transformer, controlnet, vae, adapter, pulid, _ = load_components(cfg, torch_device, dtype)
     if vae is None:
         vae = AutoencoderKL.from_pretrained(cfg['model']['base'], subfolder='vae', torch_dtype=dtype, local_files_only=True).to(torch_device)
-    model = WarmupFlowModel(transformer, controlnet, adapter, cfg)
+    model = WarmupFlowModel(transformer, controlnet, adapter, pulid, cfg)
     load_checkpoint(ckpt, model)
     model.eval()
     rows = subset['pairs'][:limit] if limit else subset['pairs']
@@ -231,7 +231,7 @@ def generate_b2(cfg: dict, ckpt: Path, subset: dict, device: str, overwrite: boo
             if out.exists() and not overwrite:
                 continue
             tokens = generate(model, batch, int(cfg['eval']['generate_steps']), seed=int(seed), device=torch_device, dtype=dtype)
-            decode_tokens(vae, tokens, int(cfg['data']['resolution'])).save(out)
+            decode_tokens(vae, tokens, cfg['data']['resolution']).save(out)
             written += 1
     return written
 
@@ -256,11 +256,11 @@ def write_report(cfg: dict, subset: dict, out: Path, generated_count: int | None
             missing_keys.append(f'{sid}:missing-cache')
             continue
         row = np.load(path)
-        for key in ('identity', 'appearance', 'garment_grid', 'head_pose'):
+        for key in ('pulid_id_embed', 'appearance', 'garment_grid', 'head_pose'):
             if key not in row.files:
                 missing_keys.append(f'{sid}:{key}')
-        if 'identity' in row.files:
-            emb = np.asarray(row['identity'])
+        if 'pulid_id_embed' in row.files:
+            emb = np.asarray(row['pulid_id_embed']).reshape(-1)
             consistency.append(cached_cosine(emb, emb.copy()))
     if generated_count is None:
         gen_line = 'generation command not run in this invocation'

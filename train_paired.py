@@ -15,20 +15,22 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 
 from conditions import (
-    FluxIdentityAdapter, assert_real_controlnet, atomic_torch_save, choose_dtype, load_yaml, make_image_ids,
+    FluxConditionAdapter, assert_real_controlnet, atomic_torch_save, choose_dtype, get_resolution, load_yaml, make_image_ids,
     make_text_ids, save_yaml, seed_everything, short_hash_path,
 )
 from dataset import PairedWarmupDataset, ResumeDistributedSampler
+from pulid_flux import PuLIDFluxAdapter
 
 
 class WarmupFlowModel(torch.nn.Module):
-    def __init__(self, transformer, controlnet, adapter: FluxIdentityAdapter, cfg: dict[str, Any]) -> None:
+    def __init__(self, transformer, controlnet, adapter: FluxConditionAdapter, pulid: PuLIDFluxAdapter, cfg: dict[str, Any]) -> None:
         super().__init__()
         self.transformer = transformer
         self.controlnet = controlnet
         self.adapter = adapter
+        self.pulid = pulid
         self.cfg = cfg
-        self.resolution = int(cfg['data']['resolution'])
+        self.width, self.height = get_resolution(cfg['data']['resolution'])
         self.control_mode = int(cfg['model']['control_mode'])
         self.controlnet_scale = float(cfg['model']['controlnet_scale'])
 
@@ -48,14 +50,13 @@ class WarmupFlowModel(torch.nn.Module):
         if pooled.ndim == 1:
             pooled = pooled.unsqueeze(0).expand(z0.shape[0], -1)
         adapter_tokens = self.adapter(
-            batch['identity'].to(device=device, dtype=dtype),
             batch['appearance'].to(device=device, dtype=dtype),
             batch['garment'].to(device=device, dtype=dtype),
             batch['head_pose'].to(device=device, dtype=dtype),
         )
         encoder_hidden_states = torch.cat([prompt, adapter_tokens], dim=1)
         txt_ids = make_text_ids(encoder_hidden_states.shape[1], device, dtype)
-        img_ids = make_image_ids(self.resolution, device, dtype)
+        img_ids = make_image_ids(self.width, self.height, device, dtype)
         with torch.no_grad():
             cn = self.controlnet(
                 hidden_states=z_tau,
@@ -70,6 +71,7 @@ class WarmupFlowModel(torch.nn.Module):
                 guidance=torch.full((z0.shape[0],), 3.5, device=device, dtype=dtype),
                 return_dict=True,
             )
+        self.pulid.set_context(batch['pulid_id_embed'].to(device=device, dtype=dtype), float(self.cfg.get('model', {}).get('pulid', {}).get('id_weight', 1.0)))
         pred = self.transformer(
             hidden_states=z_tau,
             encoder_hidden_states=encoder_hidden_states,
@@ -85,7 +87,8 @@ class WarmupFlowModel(torch.nn.Module):
         loss = F.mse_loss(pred.float(), target_v.float())
         head_null = batch.get('head_pose_is_null')
         head_null_ratio = head_null.float().mean().detach() if head_null is not None else torch.zeros((), device=device, dtype=torch.float32)
-        return loss, {'loss_pair': loss.detach(), 'head_pose_null_ratio': head_null_ratio}
+        gate_metrics = {name: torch.tensor(value, device=device, dtype=torch.float32) for name, value in self.adapter.gate_values().items()}
+        return loss, {'loss_pair': loss.detach(), 'head_pose_null_ratio': head_null_ratio, **gate_metrics}
 
 
 def setup_dist() -> tuple[int, int, int]:
@@ -126,31 +129,76 @@ def load_components(cfg: dict[str, Any], device: torch.device, dtype: torch.dtyp
     if cfg['model'].get('load_vae_in_train', False):
         vae = AutoencoderKL.from_pretrained(cfg['model']['base'], subfolder='vae', torch_dtype=dtype, local_files_only=True)
         vae.requires_grad_(False).to(device=device, dtype=dtype).eval()
-    adapter = FluxIdentityAdapter(cfg['model']['identity_adapter']).to(device=device, dtype=dtype)
-    return transformer, controlnet, vae, adapter, {'controlnet': control_info, 'lora': lora_note, 'adapter': adapter.launch_note()}
+    adapter = FluxConditionAdapter(cfg['model']['identity_adapter']).to_compute(device=device, dtype=dtype)
+    pulid = PuLIDFluxAdapter(cfg['model']['pulid'], device=device, dtype=dtype)
+    pulid.attach_to_transformer(transformer)
+    pulid_delta_l2 = pulid.self_check(device=device, dtype=dtype)
+    pulid_transformer_l2 = pulid.transformer_self_check(transformer, device=device, dtype=dtype)
+    threshold = float(cfg['model']['pulid'].get('self_check_min_l2', 1.0))
+    if pulid_delta_l2 <= threshold:
+        raise RuntimeError(f'PuLID CA startup self-check failed: delta_l2={pulid_delta_l2:.6f} <= {threshold}')
+    if pulid_transformer_l2 <= threshold:
+        raise RuntimeError(
+            'PuLID transformer hook self-check failed: '
+            f'delta_l2={pulid_transformer_l2:.6f} <= {threshold}, '
+            f'hook_calls={getattr(pulid, "_last_transformer_hook_calls", "na")}, '
+            f'delta_norm={getattr(pulid, "_last_transformer_delta_norm", "na")}, '
+            f'out0_norm={getattr(pulid, "_last_transformer_out0_norm", "na")}, '
+            f'out1_norm={getattr(pulid, "_last_transformer_out1_norm", "na")}'
+        )
+    return transformer, controlnet, vae, adapter, pulid, {
+        'controlnet': control_info,
+        'lora': lora_note,
+        'adapter': adapter.launch_note(),
+        'pulid': pulid.launch_note(),
+        'pulid_ca_self_check_l2': pulid_delta_l2,
+        'pulid_transformer_self_check_l2': pulid_transformer_l2,
+    }
 
 
 def build_optimizer(module: torch.nn.Module, cfg: dict[str, Any]):
     lr = float(cfg['_runtime']['effective_lr'])
-    adapter_mult = float(cfg['model'].get('identity_adapter', {}).get('fallback_projection_lr_mult', 5.0))
+    adapter_cfg = cfg['model'].get('identity_adapter', {})
+    adapter_mult = float(adapter_cfg.get('condition_adapter_lr_mult', 1.0))
+    gate_mult = float(adapter_cfg.get('gate_lr_mult', 10.0))
     lora_params = []
     adapter_params = []
+    gate_params = []
+    gate_suffixes = ('appearance_gate', 'garment_gate', 'pose_gate')
     for name, param in module.named_parameters():
         if not param.requires_grad:
             continue
-        if '.adapter.' in name or name.startswith('adapter.') or name.startswith('module.adapter.'):
+        is_adapter = '.adapter.' in name or name.startswith('adapter.') or name.startswith('module.adapter.')
+        if is_adapter and name.endswith(gate_suffixes):
+            gate_params.append(param)
+        elif is_adapter:
             adapter_params.append(param)
         else:
             lora_params.append(param)
     groups = []
     if lora_params:
-        groups.append({'params': lora_params, 'lr': lr})
+        groups.append({'params': lora_params, 'lr': lr, 'group_name': 'transformer_lora'})
     if adapter_params:
-        groups.append({'params': adapter_params, 'lr': lr * adapter_mult})
+        groups.append({'params': adapter_params, 'lr': lr * adapter_mult, 'group_name': 'condition_adapter'})
+    if gate_params:
+        groups.append({
+            'params': gate_params,
+            'lr': lr * gate_mult,
+            'weight_decay': 0.0,
+            'group_name': 'condition_gates_fp32',
+        })
     if cfg['training'].get('optimizer') == 'paged_adamw8bit':
         import bitsandbytes as bnb
         return bnb.optim.PagedAdamW8bit(groups)
     return torch.optim.AdamW(groups)
+
+
+def sync_stop_requested(marker: Path, rank: int, device: torch.device) -> bool:
+    requested = 1 if rank == 0 and marker.exists() else 0
+    flag = torch.tensor([requested], device=device, dtype=torch.int32)
+    if dist.is_initialized():
+        dist.broadcast(flag, src=0)
+    return bool(flag.item())
 
 
 def recompute_batch_runtime(cfg: dict[str, Any], world_size: int, micro: int) -> None:
@@ -303,6 +351,11 @@ def train(args: argparse.Namespace) -> None:
     if args.dev_single_gpu and world_size != 1:
         raise RuntimeError('--dev-single-gpu is only for one-process smoke runs')
     configure_runtime(cfg, world_size, all_gpus_train)
+    if args.override_output_id:
+        cfg['experiment']['id'] = str(args.override_output_id)
+        cfg['experiment']['wandb_run_id'] = str(args.override_output_id)
+    if args.resume:
+        cfg['training']['resume'] = str(args.resume)
     if args.override_total_steps is not None:
         cfg['training']['total_steps'] = int(args.override_total_steps)
     if args.smoke_steps > 0:
@@ -325,8 +378,8 @@ def train(args: argparse.Namespace) -> None:
         if rank == 0:
             print(f'[rank0] allow_partial_cache: using {len(dataset.ids)} cached train samples for smoke only', flush=True)
     sampler = ResumeDistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True, seed=int(cfg['experiment']['seed']))
-    transformer, controlnet, vae, adapter, load_notes = load_components(cfg, device, dtype)
-    model = WarmupFlowModel(transformer, controlnet, adapter, cfg)
+    transformer, controlnet, vae, adapter, pulid, load_notes = load_components(cfg, device, dtype)
+    model = WarmupFlowModel(transformer, controlnet, adapter, pulid, cfg)
     if not args.smoke_steps:
         maybe_probe_micro_batch(model, dataset, cfg, world_size, rank, device)
     loader = make_loader(dataset, sampler, cfg)
@@ -344,6 +397,7 @@ def train(args: argparse.Namespace) -> None:
     output = Path(cfg['experiment']['output_root']) / cfg['experiment']['id']
     ckpt_dir = output / 'checkpoints'
     log_dir = output / 'logs'
+    stop_marker = output / 'STOP_TRAINING'
     start_step = 0
     if cfg['training'].get('resume'):
         start_step = load_checkpoint(Path(cfg['training']['resume']), ddp.module if hasattr(ddp, 'module') else ddp, optimizer, sampler)
@@ -353,8 +407,21 @@ def train(args: argparse.Namespace) -> None:
         (output / 'launch.json').write_text(json.dumps({'load_notes': load_notes, 'base_hash': short_hash_path(cfg['model']['base']), 'rank0_device': torch.cuda.get_device_name(local_rank)}, indent=2, ensure_ascii=False), encoding='utf-8')
         print(f'[rank0] runtime={cfg["_runtime"]}', flush=True)
         print(f'[rank0] controlnet={load_notes["controlnet"]}', flush=True)
+        print('[rank0] optimizer_groups=' + json.dumps([
+            {
+                'name': group.get('group_name', 'unnamed'),
+                'lr': group['lr'],
+                'weight_decay': group.get('weight_decay', 'default'),
+                'params': sum(param.numel() for param in group['params']),
+                'dtypes': sorted({str(param.dtype) for param in group['params']}),
+            }
+            for group in optimizer.param_groups
+        ]), flush=True)
     if dist.is_initialized():
         dist.barrier()
+
+    if stop_marker.exists():
+        raise RuntimeError(f'stale STOP_TRAINING marker exists: {stop_marker}; inspect/remove it before resuming')
 
     global_step = start_step
     accum = int(cfg['_runtime']['grad_accum'])
@@ -362,7 +429,8 @@ def train(args: argparse.Namespace) -> None:
     benchmark_done = False
     optimizer.zero_grad(set_to_none=True)
     micro_step = 0
-    while global_step < int(cfg['training']['total_steps']):
+    stopped_by_watcher = False
+    while global_step < int(cfg['training']['total_steps']) and not stopped_by_watcher:
         sampler.set_epoch(global_step // max(1, len(loader)))
         for batch_idx, batch in enumerate(loader):
             if benchmark_start is None:
@@ -380,6 +448,9 @@ def train(args: argparse.Namespace) -> None:
             if rank == 0 and (global_step % int(cfg['training']['log_every']) == 0 or global_step <= 3):
                 log_dir.mkdir(parents=True, exist_ok=True)
                 row = {'step': global_step, 'loss_pair': float(metrics['loss_pair'].float().cpu()), 'head_pose_null_ratio': float(metrics.get('head_pose_null_ratio', torch.tensor(0.0)).float().cpu()), 'lr': cfg['_runtime']['effective_lr'], 'peak_gib': torch.cuda.max_memory_allocated(device) / 1024**3}
+                for gate_name in ('appearance_gate', 'garment_gate', 'head_pose_gate'):
+                    if gate_name in metrics:
+                        row[gate_name] = float(metrics[gate_name].float().cpu())
                 with (log_dir / 'train.jsonl').open('a', encoding='utf-8') as handle:
                     handle.write(json.dumps(row, ensure_ascii=False) + '\n')
                 print(f'[rank0] {row}', flush=True)
@@ -393,11 +464,24 @@ def train(args: argparse.Namespace) -> None:
                 benchmark_done = True
             if rank == 0 and global_step % int(cfg['training']['checkpoint_every']) == 0:
                 save_checkpoint(ckpt_dir / f'step-{global_step:06d}', ddp.module if hasattr(ddp, 'module') else ddp, optimizer, global_step, sampler, cfg)
+            if sync_stop_requested(stop_marker, rank, device):
+                stopped_by_watcher = True
+                if rank == 0:
+                    print(f'[rank0] watcher requested stop at step={global_step}: {stop_marker}', flush=True)
+                break
             if global_step >= int(cfg['training']['total_steps']):
                 break
     if rank == 0 and cfg['training'].get('save_final', True):
         save_checkpoint(ckpt_dir / 'final', ddp.module if hasattr(ddp, 'module') else ddp, optimizer, global_step, sampler, cfg)
+        (output / 'training_status.json').write_text(json.dumps({
+            'status': 'stopped_by_watcher' if stopped_by_watcher else 'complete',
+            'step': global_step,
+            'target_steps': int(cfg['training']['total_steps']),
+            'stop_marker': str(stop_marker) if stopped_by_watcher else None,
+        }, indent=2), encoding='utf-8')
     cleanup_dist()
+    if stopped_by_watcher:
+        raise SystemExit(3)
 
 
 def main() -> None:
@@ -408,6 +492,8 @@ def main() -> None:
     parser.add_argument('--allow-partial-cache', action='store_true', help='Smoke-test only: restrict train IDs to cached samples instead of requiring 100% coverage.')
     parser.add_argument('--smoke-steps', type=int, default=0, help='Smoke-test only: override total_steps and grad_accum for a short run.')
     parser.add_argument('--override-total-steps', type=int, default=None, help='Run a shorter real training job without changing grad_accum, used by speed_bench.py.')
+    parser.add_argument('--override-output-id', default=None, help='Override experiment.id for isolated smoke or recovery runs.')
+    parser.add_argument('--resume', default=None, help='Resume trainable weights, optimizer, step, and sampler from a checkpoint directory.')
     args = parser.parse_args()
     train(args)
 

@@ -11,15 +11,16 @@ from PIL import Image
 from tqdm import tqdm
 
 from conditions import (
-    arcface_embedding_from_path, assert_real_controlnet, choose_dtype, clip_patch_grid_feature, find_one, garment_crop,
-    head_crop_from_original, load_clip_vision, load_head_pose_token, load_text_embeddings, load_yaml, pack_latents,
+    assert_real_controlnet, choose_dtype, clip_patch_grid_feature, find_one, garment_crop,
+    get_resolution, head_crop_from_original, load_clip_vision, load_head_pose_token, load_text_embeddings, load_yaml, pack_latents,
     pil_to_tensor, pooled_clip_feature,
-    read_ids, seed_everything, short_hash_path,
+    read_ids, resolution_tag, seed_everything, short_hash_path,
 )
 from dataset import write_cache_manifest
+from pulid_flux import PuLIDIdentityEmbedder
 
 
-def encode_image_to_packed_latents(vae, image: Image.Image, resolution: int, device, dtype) -> np.ndarray:
+def encode_image_to_packed_latents(vae, image: Image.Image, resolution, device, dtype) -> np.ndarray:
     tensor = pil_to_tensor(image, resolution).unsqueeze(0).to(device=device, dtype=dtype)
     with torch.no_grad():
         posterior = vae.encode(tensor).latent_dist
@@ -29,7 +30,7 @@ def encode_image_to_packed_latents(vae, image: Image.Image, resolution: int, dev
     return packed[0].float().cpu().numpy().astype('float32')
 
 
-def build_one(root: Path, sample_id: str, vae, clip_model, resolution: int, device, dtype, cfg: dict) -> dict[str, np.ndarray]:
+def build_one(root: Path, sample_id: str, vae, clip_model, pulid_embedder: PuLIDIdentityEmbedder, resolution, device, dtype, cfg: dict) -> dict[str, np.ndarray]:
     human = Image.open(find_one(root / 'images/human', sample_id)).convert('RGB')
     pose = Image.open(find_one(root / 'dwpose/without_head/mannequin', sample_id)).convert('RGB')
     human_path = find_one(root / 'images/human', sample_id)
@@ -38,21 +39,9 @@ def build_one(root: Path, sample_id: str, vae, clip_model, resolution: int, devi
     pose_latents = encode_image_to_packed_latents(vae, pose, resolution, device, dtype)
     device_id = device.index if getattr(device, 'type', None) == 'cuda' and device.index is not None else 0
     try:
-        identity = arcface_embedding_from_path(
-            face_path,
-            helper_python=cfg['cache'].get('arcface_helper_python'),
-            helper_script=cfg['cache'].get('arcface_helper_script'),
-            model_root=cfg['cache'].get('arcface_model_root', '/data/muxiangyu/modelLibrary/insightface'),
-            device_id=device_id,
-        )
+        pulid_id_embed = pulid_embedder.embed_image(face_path)
     except RuntimeError:
-        identity = arcface_embedding_from_path(
-            human_path,
-            helper_python=cfg['cache'].get('arcface_helper_python'),
-            helper_script=cfg['cache'].get('arcface_helper_script'),
-            model_root=cfg['cache'].get('arcface_model_root', '/data/muxiangyu/modelLibrary/insightface'),
-            device_id=device_id,
-        )
+        pulid_id_embed = pulid_embedder.embed_image(human_path)
     head_crop = head_crop_from_original(
         human,
         model_root=cfg['cache'].get('arcface_model_root', '/data/muxiangyu/modelLibrary/insightface'),
@@ -79,7 +68,7 @@ def build_one(root: Path, sample_id: str, vae, clip_model, resolution: int, devi
     return {
         'target_latents': target_latents,
         'pose_latents': pose_latents,
-        'identity': identity.astype('float32'),
+        'pulid_id_embed': pulid_id_embed.astype('float32'),
         'appearance': appearance.astype('float32'),
         'garment_grid': garment_grid.astype('float32'),
         'head_pose': head_pose.astype('float32'),
@@ -116,6 +105,7 @@ def main() -> None:
     vae = AutoencoderKL.from_pretrained(cfg['model']['base'], subfolder='vae', torch_dtype=dtype, local_files_only=True)
     vae.eval().requires_grad_(False).to(device)
     clip_model = load_clip_vision(cfg['cache']['clip_vision_model'], device, dtype)
+    pulid_embedder = PuLIDIdentityEmbedder(cfg['model']['pulid'], device, dtype)
 
     prompt_cache = text_dir / 'prompt.npz'
     if args.overwrite or not prompt_cache.exists():
@@ -141,7 +131,7 @@ def main() -> None:
         if out.exists() and not args.overwrite:
             continue
         try:
-            payload = build_one(root, sid, vae, clip_model, int(cfg['data']['resolution']), device, dtype, cfg)
+            payload = build_one(root, sid, vae, clip_model, pulid_embedder, cfg['data']['resolution'], device, dtype, cfg)
             tmp = out.with_suffix('.npz.tmp')
             with tmp.open('wb') as handle:
                 np.savez_compressed(handle, **payload)
@@ -154,6 +144,8 @@ def main() -> None:
         'config': args.config,
         'root': str(root),
         'resolution': cfg['data']['resolution'],
+        'resolution_tag': resolution_tag(cfg['data']['resolution']),
+        'pulid': {'repo': cfg['model']['pulid']['repo'], 'weight_path': cfg['model']['pulid']['weight_path']},
         'base_hash': short_hash_path(cfg['model']['base']),
         'controlnet': assert_real_controlnet(cfg['model']['controlnet']),
         'clip_vision_model': cfg['cache']['clip_vision_model'],

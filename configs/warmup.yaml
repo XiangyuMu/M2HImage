@@ -1,21 +1,22 @@
 experiment:
-  id: phase1_warmup_b2
+  id: phase1_warmup_b2p_pulid_gatefix_resume_768x1024
   output_root: /data/muxiangyu/datasets/M2HImage/M2H_Final_v2/phase1
   seed: 20260706
   wandb: false
   wandb_project: M2H-Phase1
-  wandb_run_id: phase1_warmup_b2
-
+  wandb_run_id: phase1_warmup_b2p_pulid_gatefix_resume_768x1024
 data:
   root: /data/muxiangyu/datasets/M2HImage/M2H_Final_v2
   train_split: splits/train.txt
   val_split: splits/val.txt
   test_split: splits/test.txt
-  cache_dir: phase1/cache_512
+  cache_dir: phase1/cache_768x1024
   cf_subset: eval/cf_subset.json
-  resolution: 512
-  prompt: a photorealistic human wearing the same garment, same body pose, natural skin and hair
-
+  resolution:
+    width: 768
+    height: 1024
+  prompt: a photorealistic human wearing the same garment, same body pose, natural
+    skin and hair
 model:
   base: /data/muxiangyu/pythonPrograms/M2HImage/models/hf/black-forest-labs/FLUX.1-dev
   controlnet: /data/muxiangyu/pythonPrograms/M2HImage/models/hf/InstantX/FLUX.1-dev-Controlnet-Union
@@ -25,26 +26,34 @@ model:
   precision: bf16
   lora_rank: 16
   identity_adapter:
-    type: flux_projection_fallback_zero_gated
-    version: phase1-fallback-zero-gated-2026-07-07
-    weight_path: none
-    fallback_reason: local search found no PuLID-FLUX or InfiniteYou implementation/weights; replace before A9 ablation if mature adapter assets become available
-    fallback_projection_lr_mult: 5.0
-    id_dim: 512
+    type: condition_tokens_no_identity_pulid
+    version: phase1-pulid-condition-tokens-gatefix-2026-07-10
+    condition_adapter_lr_mult: 1.0
+    gate_lr_mult: 10.0
     appearance_dim: 1024
     garment_grid_dim: 1024
     garment_grid_max_tokens: 64
     token_dim: 4096
-    id_tokens: 4
     appearance_tokens: 4
     pose_tokens: 1
+    gate_init: 0.1
     dropout: 0.0
   gradient_checkpointing:
     enabled: true
     transformer_block_ratio: 1.0
   compile: false
   load_vae_in_train: false
-
+  pulid:
+    repo: /data/muxiangyu/modelLibrary/PuLID
+    weight_path: /data/muxiangyu/modelLibrary/PuLID/models/pulid_flux_v0.9.1.safetensors
+    antelopev2_dir: /data/muxiangyu/modelLibrary/PuLID/models/antelopev2
+    hf_home: /data/muxiangyu/modelLibrary
+    version: v0.9.1
+    id_weight: 1.0
+    double_interval: 2
+    single_interval: 4
+    onnx_provider: cpu
+    self_check_min_l2: 1.0
 cache:
   dtype: bf16
   require_coverage: true
@@ -55,14 +64,13 @@ cache:
   arcface_helper_script: /data/muxiangyu/pythonPrograms/M2HImage/tools/arcface_embed_server.py
   heldout_face_model: /data/muxiangyu/modelLibrary/insightface/models/antelopev2
   head_crop_debug_count: 20
-
 training:
-  total_steps: 6000
-  baseline_lr: 5.0e-5
+  total_steps: 4400
+  baseline_lr: 5.0e-05
   baseline_global_batch: 16
   micro_batch: 1
-  auto_micro_batch_probe: true
-  preferred_micro_batch: 2
+  auto_micro_batch_probe: false
+  preferred_micro_batch: 1
   grad_accum: auto
   max_grad_norm: 1.0
   head_pose_dropout: 0.1
@@ -76,23 +84,24 @@ training:
   benchmark_steps: 20
   save_final: true
   resume: null
-
 eval:
   watcher_poll_seconds: 30
   watcher_device: cuda:3
   fixed_val_count: 8
   identity_swap_count: 2
+  gate_move_threshold: 0.001
   generate_steps: 20
   guidance_scale: 3.5
   b2_mannequin_count: 50
   b2_identity_pool: 20
   b2_identities_per_mannequin: 4
-  b2_seeds: [0, 1]
-  b2_output_dir: eval/b2_gen
-  report_path: eval/b2_report.md
-
+  b2_seeds:
+  - 0
+  - 1
+  b2_output_dir: eval/b2p_gatefix_gen
+  report_path: eval/b2p_gatefix_report.md
 metrics:
-  output_dir: eval/metrics
+  output_dir: eval/b2p_gatefix_metrics
   heldout_id:
     recognizer: uniface_adaface_ir101
     repo: /data/muxiangyu/modelLibrary/uniface
@@ -104,6 +113,7 @@ metrics:
     gen_expand: 1.3
     ref_expand: 1.1
     min_crop_px: 256
+    sim_target_acceptance: 0.3
   headpose:
     runner: uniface_headpose
     command: null
@@ -116,3 +126,4 @@ metrics:
     dino_image_size: 518
     mask_out_value: 0.5
     high_similarity_warning_threshold: 0.92
+    previous_dead_adapter_baseline: 0.924

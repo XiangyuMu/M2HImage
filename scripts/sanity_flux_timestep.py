@@ -58,8 +58,8 @@ def main() -> None:
     parser.add_argument('--device', default='cuda:0')
     parser.add_argument('--steps', type=int, default=20)
     parser.add_argument('--seed', type=int, default=1234)
-    parser.add_argument('--height', type=int, default=512)
-    parser.add_argument('--width', type=int, default=512)
+    parser.add_argument('--height', type=int, default=1024)
+    parser.add_argument('--width', type=int, default=768)
     parser.add_argument('--out-dir', default='/data/muxiangyu/datasets/M2HImage/M2H_Final_v2/phase1/timestep_sanity')
     args = parser.parse_args()
 

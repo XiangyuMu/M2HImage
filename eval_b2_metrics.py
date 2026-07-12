@@ -51,6 +51,40 @@ def garment_warning(summary: dict[str, Any], threshold: float) -> str:
     return 'GarmentSim leaves measurable room for A2 comparison.'
 
 
+def b2p_identity_acceptance(summary: dict[str, Any], threshold: float) -> str:
+    if summary.get('status') != 'ok':
+        return "⚠ B2' identity acceptance unavailable."
+    sim_target = summary.get('sim_target_mean')
+    delta_mean = summary.get('mean')
+    if sim_target is None or delta_mean is None:
+        return "⚠ B2' identity acceptance produced no valid summary."
+    if float(sim_target) >= float(threshold) and float(delta_mean) > 0:
+        return (
+            f"B2' identity acceptance PASS: sim_target={fmt(sim_target)} >= {threshold:.3f} "
+            f"and DeltaID mean={fmt(delta_mean)} > 0."
+        )
+    return (
+        f"⚠ B2' identity acceptance FAIL: sim_target={fmt(sim_target)} "
+        f"(required >= {threshold:.3f}), DeltaID mean={fmt(delta_mean)}."
+    )
+
+
+def garment_baseline_comparison(summary: dict[str, Any], previous: float) -> str:
+    if summary.get('status') != 'ok' or summary.get('cross_identity_group_mean_mean') is None:
+        return '⚠ GarmentSim comparison to previous B2 is unavailable.'
+    current = float(summary['cross_identity_group_mean_mean'])
+    delta = current - float(previous)
+    interpretation = (
+        'The expected drop exposes real room for A2 differential improvement.'
+        if delta < 0
+        else 'No drop was observed; A2 differentiation space may remain narrow.'
+    )
+    return (
+        f'GarmentSim vs previous dead-adapter B2: current={current:.4f}, '
+        f'previous={float(previous):.4f}, delta={delta:+.4f}. {interpretation}'
+    )
+
+
 def mae_line(summary: dict[str, Any]) -> str:
     if summary.get('status') != 'ok':
         return '⚠ Head pose MAE unavailable.'
@@ -73,9 +107,11 @@ def write_report(
     headpose = load_summary(out_dir / 'headpose_summary.json')
     garment = load_summary(out_dir / 'garment_summary.json')
     threshold = float(cfg.get('metrics', {}).get('garment', {}).get('high_similarity_warning_threshold', 0.92))
+    previous_garment = float(cfg.get('metrics', {}).get('garment', {}).get('previous_dead_adapter_baseline', 0.924))
+    sim_target_threshold = float(cfg.get('metrics', {}).get('heldout_id', {}).get('sim_target_acceptance', 0.3))
 
     lines: list[str] = [
-        '# B2 Adapter-only Baseline Report',
+        "# B2' PuLID Adapter-only Baseline Report",
         '',
         f"subset: {len(subset.get('mannequins', []))} mannequins / {len(subset.get('identity_pool', []))} identity pool / {len(subset.get('pairs', []))} pairs",
         f"garment type counts: {subset.get('garment_type_counts', {})}",
@@ -160,7 +196,9 @@ def write_report(
         '## B2 Readout',
         '',
         deltaid_conclusion(delta),
+        b2p_identity_acceptance(delta, sim_target_threshold),
         garment_warning(garment, threshold),
+        garment_baseline_comparison(garment, previous_garment),
         mae_line(headpose),
     ])
     report_path.parent.mkdir(parents=True, exist_ok=True)

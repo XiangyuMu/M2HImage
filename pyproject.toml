@@ -9,11 +9,17 @@ description = "FLUX Phase 1 paired warmup and B2 baseline code for M2HImage."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+  "timm",
+  "onnxruntime",
+  "facexlib",
+  "torchsde",
+  "SentencePiece",
+  "ftfy",
   "accelerate",
   "bitsandbytes",
   "diffusers",
   "insightface",
-  "lpips",
+  "lpips==0.1.4",
   "numpy",
   "opencv-python",
   "peft",
@@ -25,7 +31,7 @@ dependencies = [
   "torchvision",
   "tqdm",
   "transformers",
-  "uniface",
+  "uniface==3.7.1",
   "wandb",
 ]
 
@@ -40,9 +46,9 @@ py-modules = [
   "dataset",
   "eval_b2",
   "eval_b2_metrics",
-  "eval_b2_local_metrics",
   "eval_b2_make_vis",
   "eval_watcher",
+  "pulid_flux",
   "speed_bench",
   "train_paired",
 ]

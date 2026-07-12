@@ -7,6 +7,9 @@ experiment:
 data:
   region_masks_z_dir: derived/region_masks_z
   identity_bank: derived/identity_bank.npz
+  # This source has only one compatible identity under the exact gender/skin/age constraints.
+  # Exclude it symmetrically from A2 and B2-cont instead of relaxing the protocol.
+  exclude_train_ids: ["47160"]
 
 training:
   total_steps: 4000

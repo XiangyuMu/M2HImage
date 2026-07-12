@@ -176,6 +176,10 @@ def test_identity_bank_sampling_is_compatible_and_deterministic(tmp_path) -> Non
         skin_cluster=np.asarray([2, 3, 1, 2, 2], dtype=np.int16),
     )
     bank = IdentityBank(path)
+    assert bank.validate_sources(['a']) == {
+        'source_count': 1,
+        'minimum_compatible_identities': 2,
+    }
     first = bank.sample_pair('a', seed=123)
     second = bank.sample_pair('a', seed=123)
     assert first == second

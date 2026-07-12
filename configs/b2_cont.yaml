@@ -7,6 +7,8 @@ experiment:
 data:
   region_masks_z_dir: derived/region_masks_z
   identity_bank: derived/identity_bank.npz
+  # Must match A2 exactly for data-order fairness.
+  exclude_train_ids: ["47160"]
 
 training:
   total_steps: 4000

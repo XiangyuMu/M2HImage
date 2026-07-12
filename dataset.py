@@ -89,6 +89,27 @@ class IdentityBank:
         delta_arc = float(np.clip(1.0 - cosine, 0.0, 2.0))
         return j_index, k_index, delta_arc
 
+    def validate_sources(self, sample_ids: list[str]) -> dict[str, int]:
+        missing = [sample_id for sample_id in sample_ids if sample_id not in self.id_to_index]
+        insufficient = []
+        minimum = len(self.ids)
+        for sample_id in sample_ids:
+            if sample_id not in self.id_to_index:
+                continue
+            count = len(self.compatible_indices(self.id_to_index[sample_id]))
+            minimum = min(minimum, count)
+            if count < 2:
+                insufficient.append((sample_id, count))
+        if missing or insufficient:
+            raise RuntimeError(
+                'A2 identity bank cannot satisfy strict j!=k!=i compatible sampling; '
+                f'missing={missing[:10]}, insufficient={insufficient[:10]}'
+            )
+        return {
+            'source_count': len(sample_ids),
+            'minimum_compatible_identities': minimum if sample_ids else 0,
+        }
+
 
 class PairedWarmupDataset(Dataset):
     def __init__(self, config: dict[str, Any], split: str = 'train', require_coverage: bool = True) -> None:
@@ -96,6 +117,15 @@ class PairedWarmupDataset(Dataset):
         self.root = Path(config['data']['root'])
         split_key = f'{split}_split'
         self.ids = read_ids(self.root / config['data'][split_key])
+        self.excluded_ids: list[str] = []
+        if split == 'train':
+            requested = [str(value) for value in config['data'].get('exclude_train_ids', [])]
+            unknown = sorted(set(requested) - set(self.ids))
+            if unknown:
+                raise RuntimeError(f'exclude_train_ids are absent from the train split: {unknown}')
+            excluded = set(requested)
+            self.excluded_ids = [sample_id for sample_id in self.ids if sample_id in excluded]
+            self.ids = [sample_id for sample_id in self.ids if sample_id not in excluded]
         self.cache_dir = self.root / config['data']['cache_dir']
         width, height = get_resolution(config['data']['resolution'])
         self.token_count = (height // 16) * (width // 16)
@@ -110,6 +140,7 @@ class PairedWarmupDataset(Dataset):
         if self.differential_enabled:
             bank_path = self.root / config['data'].get('identity_bank', 'derived/identity_bank.npz')
             self.identity_bank = IdentityBank(bank_path)
+            self.identity_bank.validate_sources(self.ids)
         if require_coverage:
             self.assert_coverage()
 

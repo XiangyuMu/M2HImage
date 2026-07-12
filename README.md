@@ -152,6 +152,8 @@ derived/identity_bank.npz
 
 Identity compatibility is same gender, skin-cluster distance at most 1, and age distance at most 15. The bank embedding is never sent to FLUX; j/k model conditions still come from cached PuLID tokens and appearance features.
 
+The exact compatibility audit found one infeasible source, `47160`, with only one eligible counterfactual identity. It is excluded as a source in both A2 and B2-cont instead of relaxing the protocol; it remains available as a donor for other compatible samples. Dataset startup validates that every active A2 source has at least two candidates. `launch.json` records the ordered train-ID hash, sample count, and exclusion list, and the gate report treats any mismatch as a fairness blocker.
+
 ## A2 Execution Order
 
 1. Build token masks and inspect the 20 overlays under `derived/region_masks_z/debug/`.

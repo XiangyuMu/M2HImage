@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -782,6 +783,9 @@ def train(args: argparse.Namespace) -> None:
         if resume_path is not None and (resume_path / 'trainable.pt').exists()
         else None
     )
+    train_ids_hash = hashlib.sha256(
+        ('\n'.join(dataset.ids) + '\n').encode('utf-8')
+    ).hexdigest()[:16]
     if rank == 0:
         output.mkdir(parents=True, exist_ok=True)
         save_yaml(output / 'resolved_config.yaml', cfg)
@@ -792,6 +796,9 @@ def train(args: argparse.Namespace) -> None:
             'resume_checkpoint': str(resume_path) if resume_path else None,
             'resume_trainable_hash': resume_hash,
             'resume_sampler_state': sampler.state_dict(),
+            'train_ids_hash': train_ids_hash,
+            'train_sample_count': len(dataset.ids),
+            'excluded_train_ids': dataset.excluded_ids,
             'run_origin_step': run_origin_step,
             'target_step': target_step,
             'fairness_note': 'A2 and B2-cont must use the same resume checkpoint/hash, seed, sampler state, global batch, LR, and continuation step count.',

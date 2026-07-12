@@ -170,6 +170,9 @@ def fairness_check(root: Path, a2_cfg: dict, b2_cfg: dict) -> tuple[bool, dict[s
     fields = {
         'resume_trainable_hash': (a2_launch.get('resume_trainable_hash'), b2_launch.get('resume_trainable_hash')),
         'resume_sampler_state': (a2_launch.get('resume_sampler_state'), b2_launch.get('resume_sampler_state')),
+        'train_ids_hash': (a2_launch.get('train_ids_hash'), b2_launch.get('train_ids_hash')),
+        'train_sample_count': (a2_launch.get('train_sample_count'), b2_launch.get('train_sample_count')),
+        'excluded_train_ids': (a2_launch.get('excluded_train_ids'), b2_launch.get('excluded_train_ids')),
         'seed': (a2_resolved['experiment']['seed'], b2_resolved['experiment']['seed']),
         'global_batch': (a2_resolved['_runtime']['global_batch'], b2_resolved['_runtime']['global_batch']),
         'effective_lr': (a2_resolved['_runtime']['effective_lr'], b2_resolved['_runtime']['effective_lr']),

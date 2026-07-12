@@ -22,8 +22,26 @@ PROMPT = 'a photorealistic human wearing the same garment, same body pose, natur
 
 def load_yaml(path: str | Path) -> dict[str, Any]:
     import yaml
-    with Path(path).open('r', encoding='utf-8') as handle:
-        return yaml.safe_load(handle)
+    path = Path(path)
+    with path.open('r', encoding='utf-8') as handle:
+        payload = yaml.safe_load(handle)
+    parent = payload.pop('extends', None) if isinstance(payload, dict) else None
+    if not parent:
+        return payload
+
+    def merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+        result = dict(base)
+        for key, value in override.items():
+            if isinstance(value, dict) and isinstance(result.get(key), dict):
+                result[key] = merge(result[key], value)
+            else:
+                result[key] = value
+        return result
+
+    parent_path = Path(parent)
+    if not parent_path.is_absolute():
+        parent_path = path.parent / parent_path
+    return merge(load_yaml(parent_path), payload)
 
 
 def save_yaml(path: str | Path, payload: dict[str, Any]) -> None:
@@ -568,38 +586,44 @@ def arcface_embedding_from_path(
     helper_script: str | Path | None = None,
     model_root: str | Path = '/data/muxiangyu/modelLibrary/insightface',
     device_id: int = 0,
+    force_helper: bool = False,
 ) -> np.ndarray:
-    try:
-        return arcface_embedding(Image.open(face_path).convert('RGB'), model_root=model_root)
-    except RuntimeError as local_exc:
-        if not helper_python:
-            raise
-        script = Path(helper_script or 'tools/arcface_embed.py')
-        if 'server' in script.name:
-            return _arcface_embedding_via_server(face_path, helper_python, script, model_root, device_id)
-        cmd = [
-            str(helper_python),
-            str(script),
-            '--image',
-            str(face_path),
-            '--model-root',
-            str(model_root),
-            '--device-id',
-            str(device_id),
-        ]
+    local_exc: Exception | None = None
+    if not force_helper:
         try:
-            proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
-        except subprocess.CalledProcessError as helper_exc:
-            raise RuntimeError(
-                f'ArcFace helper failed after local import failed ({local_exc}); stderr={helper_exc.stderr.strip()}'
-            ) from helper_exc
-        json_line = next((line for line in reversed(proc.stdout.splitlines()) if line.strip().startswith('[')), '')
-        if not json_line:
-            raise RuntimeError(f'ArcFace helper produced no JSON embedding; stdout={proc.stdout[-1000:]}')
-        emb = np.asarray(json.loads(json_line), dtype='float32')
-        if emb.shape != (512,):
-            raise RuntimeError(f'ArcFace helper returned invalid shape {emb.shape}, expected (512,)')
-        return emb
+            return arcface_embedding(Image.open(face_path).convert('RGB'), model_root=model_root)
+        except RuntimeError as exc:
+            local_exc = exc
+    if not helper_python:
+        if local_exc is not None:
+            raise local_exc
+        raise RuntimeError('force_helper=True requires helper_python')
+    script = Path(helper_script or 'tools/arcface_embed.py')
+    if 'server' in script.name:
+        return _arcface_embedding_via_server(face_path, helper_python, script, model_root, device_id)
+    cmd = [
+        str(helper_python),
+        str(script),
+        '--image',
+        str(face_path),
+        '--model-root',
+        str(model_root),
+        '--device-id',
+        str(device_id),
+    ]
+    try:
+        proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as helper_exc:
+        raise RuntimeError(
+            f'ArcFace helper failed after local import failed ({local_exc}); stderr={helper_exc.stderr.strip()}'
+        ) from helper_exc
+    json_line = next((line for line in reversed(proc.stdout.splitlines()) if line.strip().startswith('[')), '')
+    if not json_line:
+        raise RuntimeError(f'ArcFace helper produced no JSON embedding; stdout={proc.stdout[-1000:]}')
+    emb = np.asarray(json.loads(json_line), dtype='float32')
+    if emb.shape != (512,):
+        raise RuntimeError(f'ArcFace helper returned invalid shape {emb.shape}, expected (512,)')
+    return emb
 
 
 def choose_dtype(name: str) -> torch.dtype:

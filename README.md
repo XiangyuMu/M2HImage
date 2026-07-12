@@ -1,6 +1,6 @@
-# M2HImage FLUX Phase 1 Warmup / B2' Baseline
+# M2HImage FLUX Phase 1 Warmup / B2' / A2 Differential Gate
 
-This repository contains the current FLUX.1-dev Phase 1 path for MA-RA-CDT paired flow warmup and B2/B2' adapter-only baseline evaluation.
+This repository contains the FLUX.1-dev MA-RA-CDT paired warmup, B2' adapter-only baseline, and A2 differential counterfactual decision experiment.
 
 ## Critical Notes
 
@@ -11,19 +11,28 @@ This repository contains the current FLUX.1-dev Phase 1 path for MA-RA-CDT paire
 - Watcher failures now create a `STOP_TRAINING` marker consumed synchronously by every DDP rank. Training saves a final checkpoint and exits; watcher exits after processing `final`.
 - Dataset native resolution probe found `images/human` and `images/mannequin` first 100 samples are all `768x1024`. Phase 1 cache, training, watcher, B2 generation, and mask projection now use `width=768,height=1024`.
 - The obsolete 512 cache/results were deleted; active cache output is `phase1/cache_768x1024`.
+- A2 is judged only against the equal-step `B2-cont` continuation from the same B2' checkpoint. B2' is a reference column, not the mechanism decision comparator.
+- A2 has no canvas perturbation, VAE decode, or identity loss. Regional adaptation is implemented only by packed-token loss masks; directional identity contrast remains reserved for A4.
 
 ## Active Files
 
 ```text
 configs/warmup.yaml              FLUX Phase 1 PuLID/native-resolution config
+configs/a2_diff.yaml             A2: equal-step continuation with teach/invariance/hinge losses
+configs/b2_cont.yaml             B2-cont: equal-step paired-only continuation
 pulid_flux.py                    frozen PuLID-FLUX v0.9.1 loader, ID embedder, transformer hook self-check
 build_cache.py                   offline latent/text/PuLID-ID/appearance/garment_grid/head-pose cache
-train_paired.py                  paired flow warmup training, 3-card DDP by default
+build_region_masks_z.py          CPU builder for cloth/body-bg/face packed-token masks
+build_identity_bank.py           resumable ArcFace/attribute bank builder
+train_paired.py                  paired and A2 differential flow training, 3-card DDP by default
 eval_watcher.py                  checkpoint watcher with paired and identity-swap panels
 eval_b2.py                       frozen B2 subset/generation/report entry
 eval_b2_metrics.py               official offline B2 metrics: held-out DeltaID, head-pose MAE, GarmentSim
+eval_gate_report.py              A2 vs B2-cont fairness check, paired tests, tail analysis, verdict
 scripts/sanity_flux_timestep.py  prompt-only FLUX timestep sanity check
 scripts/verify_condition_gates.py real FLUX/ControlNet/PuLID one-step gate verification
+scripts/a2_vram_probe.py         real 1x ControlNet + 3x transformer differential VRAM probe
+scripts/run_a2_gate.sh           sequential A2/B2-cont training, generation, metrics, gate report
 scripts/run_phase1_pipeline.sh   cache check + complete gatefix pipeline
 scripts/run_gatefix_to_b2.sh     4400-step train, watcher hard gate, B2' generation and metrics
 scripts/run_b2_generation.sh     multi-GPU B2' generation helper
@@ -41,6 +50,8 @@ hf_home: /data/muxiangyu/modelLibrary
 ```
 
 Current PuLID-FLUX weight hash prefix: `92c41c3af322b02e`. Startup fails if these assets are missing. The loader also runs two self-checks: PuLID CA delta and real FLUX transformer output delta.
+
+For A2, the transformer self-check additionally compares two different PuLID contexts at fixed latent/timestep. PuLID context tensors travel through the non-reentrant checkpoint graph explicitly, so i/j/k backward recomputation cannot reuse the final context accidentally.
 
 ## Phase 1 Execution Order
 
@@ -103,6 +114,97 @@ head_pose        # raw token, no cache-time dropout
 ```
 
 Training applies `training.head_pose_dropout` dynamically in `PairedWarmupDataset`; eval/watcher/B2 use dropout 0.
+
+## A2 Differential Definition
+
+For a shared paired sample latent `z_tau`, A2 computes one ControlNet result and reuses it for three transformer calls:
+
+```text
+paired: PuLID(i) + appearance(i)
+CF-j:   PuLID(j) + appearance(j)
+CF-k:   PuLID(k) + appearance(k)
+```
+
+Garment grid, head pose, pose ControlNet, prompt, `z_tau`, and `tau` remain from sample `i`. The losses are:
+
+```text
+L = L_pair + 0.5 L_teach + 0.2 L_inv + 0.05 L_hinge
+```
+
+Differential losses run only for `tau in [0.2,0.8]`. During the first 200 continuation steps, teach/invariance remain active while hinge weight is zero and `g` is calibrated as `Q25(face_diff / d_arc)`. The resolved value is written to `resolved_config.yaml`, `hinge_calibration.json`, logs, and checkpoints.
+
+## A2 Additional Assets
+
+```text
+derived/region_masks_z/{id}.npz
+  cloth_safe_z   # (3072,) float16
+  body_bg_z      # (3072,) float16
+  face_z         # (3072,) float16, source id_strong
+
+derived/identity_bank.npz
+  ids
+  embeds         # (36034, 512), normalized ArcFace; sampling/calibration only
+  gender
+  age
+  age_group
+  skin_cluster
+```
+
+Identity compatibility is same gender, skin-cluster distance at most 1, and age distance at most 15. The bank embedding is never sent to FLUX; j/k model conditions still come from cached PuLID tokens and appearance features.
+
+## A2 Execution Order
+
+1. Build token masks and inspect the 20 overlays under `derived/region_masks_z/debug/`.
+
+```bash
+/home/muxiangyu/miniconda3/envs/refton_m2h/bin/python build_region_masks_z.py \
+  --config configs/a2_diff.yaml --split train --workers 24 --debug-count 20
+```
+
+2. Build the resumable single-file identity bank.
+
+```bash
+/home/muxiangyu/miniconda3/envs/refton_m2h/bin/python build_identity_bank.py \
+  --config configs/a2_diff.yaml --workers 8
+```
+
+3. Run the real full-differential VRAM probe.
+
+```bash
+CUDA_VISIBLE_DEVICES=0 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+/home/muxiangyu/miniconda3/envs/refton_m2h/bin/python scripts/a2_vram_probe.py \
+  --config configs/a2_diff.yaml --device cuda:0
+```
+
+Measured adoption at 768x1024: rank 16, `diff_every=1`, one ControlNet plus three transformer forwards, peak `35.48 GiB`; no rank or frequency reduction is required. The report is `phase1/vram_report_diff_768x1024.md`.
+
+4. Run the required 20-step single-GPU smoke. Its first step forces `tau=0.5`, and smoke-only `g` makes all three losses executable.
+
+```bash
+CUDA_VISIBLE_DEVICES=0 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+/home/muxiangyu/miniconda3/envs/refton_m2h/bin/python train_paired.py \
+  --config configs/a2_diff.yaml --dev-single-gpu --smoke-steps 20 \
+  --override-output-id phase2_a2_smoke_20
+```
+
+5. Run A2 and B2-cont sequentially with identical B2' resume hash, sampler state, seed, global batch, LR, LoRA rank, and 4000 continuation steps; then generate and evaluate both with the frozen subset.
+
+```bash
+bash scripts/run_a2_gate.sh
+```
+
+Final outputs:
+
+```text
+eval/a2_gen/
+eval/a2_metrics/
+eval/b2cont_gen/
+eval/b2cont_metrics/
+eval/gate_garment_per_mid_hist.png
+eval/gate_report.md
+```
+
+`eval_gate_report.py` blocks the verdict if fairness fields differ. It reports A2/B2-cont/B2' side by side, paired per-mannequin GarmentSim and pose-variance Wilcoxon tests, bottom-quartile GarmentSim, DeltaID regression, effect sizes, and the fixed PASS/MIXED/FAIL rule.
 
 ## Grep Disposition
 

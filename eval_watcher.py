@@ -34,14 +34,32 @@ def generate(model: WarmupFlowModel, batch: dict, steps: int, seed: int, device,
         local = batch
         prompt = local['prompt_embeds'].to(device=device, dtype=dtype).unsqueeze(0) if local['prompt_embeds'].ndim == 2 else local['prompt_embeds'].to(device=device, dtype=dtype)
         pooled = local['pooled_prompt_embeds'].to(device=device, dtype=dtype).unsqueeze(0) if local['pooled_prompt_embeds'].ndim == 1 else local['pooled_prompt_embeds'].to(device=device, dtype=dtype)
-        adapter_tokens = model.adapter(local['appearance'].to(device=device, dtype=dtype).unsqueeze(0), local['garment'].to(device=device, dtype=dtype).unsqueeze(0), local['head_pose'].to(device=device, dtype=dtype).unsqueeze(0))
-        model.pulid.set_context(local['pulid_id_embed'].to(device=device, dtype=dtype).unsqueeze(0), float(model.cfg.get('model', {}).get('pulid', {}).get('id_weight', 1.0)))
-        from conditions import make_image_ids, make_text_ids
+        cond_tokens = model._condition_tokens(
+            prompt,
+            local['appearance'].to(device=device, dtype=dtype).unsqueeze(0),
+            local['garment'].to(device=device, dtype=dtype).unsqueeze(0),
+            local['head_pose'].to(device=device, dtype=dtype).unsqueeze(0),
+        )
+        from conditions import make_image_ids
         img_ids = make_image_ids(model.width, model.height, device, dtype)
-        guidance_scale = float(model.cfg.get('eval', {}).get('guidance_scale', 3.5))
         with torch.no_grad():
-            cn = model.controlnet(hidden_states=z, controlnet_cond=local['pose_latents'].to(device=device, dtype=dtype).unsqueeze(0), controlnet_mode=torch.full((1, 1), model.control_mode, device=device, dtype=torch.long), conditioning_scale=model.controlnet_scale, encoder_hidden_states=prompt, pooled_projections=pooled, timestep=model_timestep, img_ids=img_ids, txt_ids=make_text_ids(prompt.shape[1], device, dtype), guidance=torch.full((1,), guidance_scale, device=device, dtype=dtype), return_dict=True)
-            v = model.transformer(hidden_states=z, encoder_hidden_states=torch.cat([prompt, adapter_tokens], dim=1), pooled_projections=pooled, timestep=model_timestep, img_ids=img_ids, txt_ids=make_text_ids(prompt.shape[1] + adapter_tokens.shape[1], device, dtype), guidance=torch.full((1,), guidance_scale, device=device, dtype=dtype), controlnet_block_samples=cn.controlnet_block_samples, controlnet_single_block_samples=cn.controlnet_single_block_samples, return_dict=True).sample
+            cn_samples = model._controlnet_forward(
+                z,
+                model_timestep,
+                prompt,
+                pooled,
+                local['pose_latents'].to(device=device, dtype=dtype).unsqueeze(0),
+                img_ids,
+            )
+            v = model._transformer_forward(
+                z,
+                model_timestep,
+                cond_tokens,
+                local['pulid_id_embed'].to(device=device, dtype=dtype).unsqueeze(0),
+                cn_samples,
+                pooled=pooled,
+                img_ids=img_ids,
+            )
         z = z - (1.0 / steps) * v
     return z
 
@@ -119,6 +137,60 @@ def gate_history(path: Path, gate_init: float) -> tuple[dict | None, dict[str, d
                     abs(value - gate_init),
                 )
     return last, stats
+
+
+def differential_collapse_risk(path: Path, cfg: dict) -> tuple[bool, dict]:
+    differential = cfg.get('training', {}).get('differential', {})
+    if not differential.get('enabled', False):
+        return False, {'status': 'disabled'}
+    window = int(differential.get('collapse_window_steps', 500))
+    drop_threshold = float(differential.get('collapse_drop_fraction', 0.30))
+    calibration_steps = int(differential.get('calibration_steps', 200))
+    rows: list[tuple[int, float]] = []
+    if path.exists():
+        with path.open('r', encoding='utf-8') as handle:
+            for line in handle:
+                try:
+                    row = json.loads(line)
+                    run_step = int(row['run_step'])
+                    value = float(row['face_diff_norm'])
+                    active = float(row.get('diff_active_ratio', 0.0))
+                except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+                    continue
+                if run_step > calibration_steps and active > 0.0 and np.isfinite(value) and value > 0.0:
+                    rows.append((run_step, value))
+    if not rows:
+        return False, {'status': 'insufficient', 'reason': 'no active differential log rows'}
+    max_step = max(step for step, _ in rows)
+
+    def mean_between(start: int, end: int) -> float | None:
+        values = [value for step, value in rows if start < step <= end]
+        return float(np.mean(values)) if values else None
+
+    baseline = mean_between(calibration_steps, calibration_steps + window)
+    latest = mean_between(max_step - window, max_step)
+    previous = mean_between(max_step - 2 * window, max_step - window)
+    details = {
+        'status': 'ok',
+        'window_steps': window,
+        'drop_threshold': drop_threshold,
+        'baseline_mean': baseline,
+        'previous_mean': previous,
+        'latest_mean': latest,
+        'latest_run_step': max_step,
+    }
+    if baseline is None or previous is None or latest is None:
+        details['status'] = 'insufficient'
+        return False, details
+    risk = (
+        latest < baseline * (1.0 - drop_threshold)
+        and previous < baseline * (1.0 - 0.8 * drop_threshold)
+        and latest <= previous * 1.05
+    )
+    details['risk'] = risk
+    details['drop_fraction'] = 1.0 - latest / max(baseline, 1e-8)
+    return risk, details
+
 
 def run_once(config_path: str, ckpt: Path, device: str) -> bool:
     cfg = load_yaml(config_path)
@@ -199,12 +271,22 @@ def run_once(config_path: str, ckpt: Path, device: str) -> bool:
             f'by more than {gate_move_threshold}'
         )
         stop_training = True
+    collapse_risk, collapse_details = differential_collapse_risk(
+        experiment_dir / 'logs' / 'train.jsonl', cfg
+    )
+    if collapse_risk:
+        warnings.insert(
+            0,
+            '⚠ COLLAPSE-RISK: face-region differential norm declined by more than 30% '
+            'across sustained 500-step windows',
+        )
     report = ['# Warmup Watcher Report', '']
     report.extend(warnings or ['status: automatic checks passed thresholds'])
     report.extend(['', f'checkpoint: `{ckpt}`', '', '## Automatic Checks', ''])
     report.append(f'face detection rate: {detected}/{len(generated_paths)} = {face_rate:.2%}')
     report.append(f'gate latest row: {gate_row if gate_row else "N/A"}')
     report.append(f'gate history movement: {gate_stats}')
+    report.append(f'differential collapse monitor: {collapse_details}')
     report.append('')
     report.append('| sample | swap_id | ArcFace cos(generated c_i, swap c_j) | status |')
     report.append('|---|---|---:|---|')

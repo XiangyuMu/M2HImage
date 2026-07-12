@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
@@ -16,7 +17,7 @@ from torch.utils.data import DataLoader
 
 from conditions import (
     FluxConditionAdapter, assert_real_controlnet, atomic_torch_save, choose_dtype, get_resolution, load_yaml, make_image_ids,
-    make_text_ids, save_yaml, seed_everything, short_hash_path,
+    make_text_ids, save_yaml, seed_everything, sha256_file, short_hash_path,
 )
 from dataset import PairedWarmupDataset, ResumeDistributedSampler
 from pulid_flux import PuLIDFluxAdapter
@@ -33,62 +34,353 @@ class WarmupFlowModel(torch.nn.Module):
         self.width, self.height = get_resolution(cfg['data']['resolution'])
         self.control_mode = int(cfg['model']['control_mode'])
         self.controlnet_scale = float(cfg['model']['controlnet_scale'])
+        self.guidance_scale = float(cfg.get('eval', {}).get('guidance_scale', 3.5))
+        self.run_origin_step: int | None = None
 
-    def forward(self, batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    def set_run_origin_step(self, step: int) -> None:
+        if self.run_origin_step is None:
+            self.run_origin_step = int(step)
+
+    def _prepare_flow(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         dtype = next(self.transformer.parameters()).dtype
         device = next(self.transformer.parameters()).device
         z0 = batch['target_latents'].to(device=device, dtype=dtype)
         z1 = torch.randn_like(z0)
-        tau = torch.rand(z0.shape[0], device=device, dtype=dtype)
+        tau_override = batch.get('tau_override')
+        if tau_override is None:
+            tau = torch.rand(z0.shape[0], device=device, dtype=dtype)
+        else:
+            tau = tau_override.to(device=device, dtype=dtype).reshape(-1)
+            if tau.shape[0] == 1 and z0.shape[0] > 1:
+                tau = tau.expand(z0.shape[0])
+            if tau.shape[0] != z0.shape[0]:
+                raise RuntimeError(f'tau_override batch={tau.shape[0]}, expected {z0.shape[0]}')
         z_tau = (1.0 - tau.view(-1, 1, 1)) * z0 + tau.view(-1, 1, 1) * z1
         target_v = z1 - z0
-        model_timestep = tau
         prompt = batch['prompt_embeds'].to(device=device, dtype=dtype)
         pooled = batch['pooled_prompt_embeds'].to(device=device, dtype=dtype)
         if prompt.ndim == 2:
             prompt = prompt.unsqueeze(0).expand(z0.shape[0], -1, -1)
         if pooled.ndim == 1:
             pooled = pooled.unsqueeze(0).expand(z0.shape[0], -1)
-        adapter_tokens = self.adapter(
+        img_ids = make_image_ids(self.width, self.height, device, dtype)
+        return {
+            'z0': z0,
+            'z1': z1,
+            'z_tau': z_tau,
+            'target_v': target_v,
+            'tau': tau,
+            'prompt': prompt,
+            'pooled': pooled,
+            'img_ids': img_ids,
+            'device': device,
+            'dtype': dtype,
+        }
+
+    def _condition_tokens(
+        self,
+        prompt: torch.Tensor,
+        appearance: torch.Tensor,
+        garment: torch.Tensor,
+        head_pose: torch.Tensor,
+    ) -> torch.Tensor:
+        adapter_tokens = self.adapter(appearance, garment, head_pose)
+        return torch.cat([prompt, adapter_tokens], dim=1)
+
+    def _controlnet_forward(
+        self,
+        z_tau: torch.Tensor,
+        tau: torch.Tensor,
+        prompt: torch.Tensor,
+        pooled: torch.Tensor,
+        pose_latents: torch.Tensor,
+        img_ids: torch.Tensor,
+    ) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
+        device, dtype = z_tau.device, z_tau.dtype
+        with torch.no_grad():
+            cn = self.controlnet(
+                hidden_states=z_tau,
+                controlnet_cond=pose_latents.to(device=device, dtype=dtype),
+                controlnet_mode=torch.full((z_tau.shape[0], 1), self.control_mode, device=device, dtype=torch.long),
+                conditioning_scale=self.controlnet_scale,
+                encoder_hidden_states=prompt,
+                pooled_projections=pooled,
+                timestep=tau,
+                img_ids=img_ids,
+                txt_ids=make_text_ids(prompt.shape[1], device, dtype),
+                guidance=torch.full((z_tau.shape[0],), self.guidance_scale, device=device, dtype=dtype),
+                return_dict=True,
+            )
+        return cn.controlnet_block_samples, cn.controlnet_single_block_samples
+
+    def _transformer_forward(
+        self,
+        z_tau: torch.Tensor,
+        tau: torch.Tensor,
+        cond_tokens: torch.Tensor,
+        pulid_embed: torch.Tensor,
+        cn_samples: tuple[list[torch.Tensor], list[torch.Tensor]],
+        *,
+        pooled: torch.Tensor,
+        img_ids: torch.Tensor,
+    ) -> torch.Tensor:
+        device, dtype = z_tau.device, z_tau.dtype
+        self.pulid.set_context(
+            pulid_embed.to(device=device, dtype=dtype),
+            float(self.cfg.get('model', {}).get('pulid', {}).get('id_weight', 1.0)),
+        )
+        pulid_context = self.pulid.context_kwargs()
+        try:
+            return self.transformer(
+                hidden_states=z_tau,
+                encoder_hidden_states=cond_tokens,
+                pooled_projections=pooled,
+                timestep=tau,
+                img_ids=img_ids,
+                txt_ids=make_text_ids(cond_tokens.shape[1], device, dtype),
+                guidance=torch.full((z_tau.shape[0],), self.guidance_scale, device=device, dtype=dtype),
+                joint_attention_kwargs=pulid_context,
+                controlnet_block_samples=cn_samples[0],
+                controlnet_single_block_samples=cn_samples[1],
+                return_dict=True,
+            ).sample
+        finally:
+            # The explicit context tensor is captured by non-reentrant checkpointing,
+            # so clearing the mutable fallback cannot mix i/j/k during backward recompute.
+            self.pulid.clear_context()
+
+    def _base_metrics(self, batch: dict[str, torch.Tensor], flow: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        device = flow['device']
+        head_null = batch.get('head_pose_is_null')
+        head_null_ratio = (
+            head_null.float().mean().detach()
+            if head_null is not None
+            else torch.zeros((), device=device, dtype=torch.float32)
+        )
+        metrics = {
+            'head_pose_null_ratio': head_null_ratio,
+            'tau_mean': flow['tau'].detach().float().mean(),
+            'z1_mean': flow['z1'].detach().float().mean(),
+            'controlnet_forward_count': torch.ones((), device=device, dtype=torch.float32),
+        }
+        metrics.update({
+            name: torch.tensor(value, device=device, dtype=torch.float32)
+            for name, value in self.adapter.gate_values().items()
+        })
+        return metrics
+
+    def forward(
+        self,
+        batch: dict[str, torch.Tensor],
+        train_step: int | None = None,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        flow = self._prepare_flow(batch)
+        dtype, device = flow['dtype'], flow['device']
+        cond_tokens = self._condition_tokens(
+            flow['prompt'],
             batch['appearance'].to(device=device, dtype=dtype),
             batch['garment'].to(device=device, dtype=dtype),
             batch['head_pose'].to(device=device, dtype=dtype),
         )
-        encoder_hidden_states = torch.cat([prompt, adapter_tokens], dim=1)
-        txt_ids = make_text_ids(encoder_hidden_states.shape[1], device, dtype)
-        img_ids = make_image_ids(self.width, self.height, device, dtype)
-        with torch.no_grad():
-            cn = self.controlnet(
-                hidden_states=z_tau,
-                controlnet_cond=batch['pose_latents'].to(device=device, dtype=dtype),
-                controlnet_mode=torch.full((z0.shape[0], 1), self.control_mode, device=device, dtype=torch.long),
-                conditioning_scale=self.controlnet_scale,
-                encoder_hidden_states=prompt,
-                pooled_projections=pooled,
-                timestep=model_timestep,
-                img_ids=img_ids,
-                txt_ids=make_text_ids(prompt.shape[1], device, dtype),
-                guidance=torch.full((z0.shape[0],), 3.5, device=device, dtype=dtype),
-                return_dict=True,
+        cn_samples = self._controlnet_forward(
+            flow['z_tau'],
+            flow['tau'],
+            flow['prompt'],
+            flow['pooled'],
+            batch['pose_latents'],
+            flow['img_ids'],
+        )
+        pred = self._transformer_forward(
+            flow['z_tau'],
+            flow['tau'],
+            cond_tokens,
+            batch['pulid_id_embed'],
+            cn_samples,
+            pooled=flow['pooled'],
+            img_ids=flow['img_ids'],
+        )
+        loss = F.mse_loss(pred.float(), flow['target_v'].float())
+        metrics = self._base_metrics(batch, flow)
+        metrics.update({
+            'loss_total': loss.detach(),
+            'loss_pair': loss.detach(),
+            'transformer_forward_count': torch.ones((), device=device, dtype=torch.float32),
+        })
+        return loss, metrics
+
+
+class DifferentialFlowModel(WarmupFlowModel):
+    def __init__(self, transformer, controlnet, adapter: FluxConditionAdapter, pulid: PuLIDFluxAdapter, cfg: dict[str, Any]) -> None:
+        super().__init__(transformer, controlnet, adapter, pulid, cfg)
+        self.diff_cfg = cfg['training']['differential']
+        resolved = self.diff_cfg.get('hinge_g_resolved', self.diff_cfg.get('hinge_g'))
+        self.hinge_g = None if resolved is None else float(resolved)
+
+    def set_hinge_g(self, value: float) -> None:
+        if not np.isfinite(value) or value <= 0.0:
+            raise RuntimeError(f'calibrated hinge g must be positive and finite, got {value}')
+        self.hinge_g = float(value)
+        self.diff_cfg['hinge_g_resolved'] = self.hinge_g
+
+    def differential_state_dict(self) -> dict[str, Any]:
+        return {
+            'hinge_g': self.hinge_g,
+            'run_origin_step': self.run_origin_step,
+        }
+
+    def load_differential_state(self, state: dict[str, Any]) -> None:
+        if state.get('hinge_g') is not None:
+            self.set_hinge_g(float(state['hinge_g']))
+        if state.get('run_origin_step') is not None:
+            self.run_origin_step = int(state['run_origin_step'])
+
+    @staticmethod
+    def _masked_l1_per_sample(diff: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        values = diff.float().abs()
+        weights = mask.to(device=diff.device, dtype=torch.float32).clamp(0.0, 1.0)
+        numerator = (values * weights.unsqueeze(-1)).sum(dim=(1, 2))
+        denominator = weights.sum(dim=1).clamp_min(1e-6) * values.shape[-1]
+        return numerator / denominator
+
+    @staticmethod
+    def _active_mean(values: torch.Tensor, active: torch.Tensor) -> torch.Tensor:
+        weights = active.to(dtype=values.dtype)
+        return (values * weights).sum() / weights.sum().clamp_min(1.0)
+
+    def forward(
+        self,
+        batch: dict[str, torch.Tensor],
+        train_step: int | None = None,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        train_step = int(train_step or 0)
+        flow = self._prepare_flow(batch)
+        dtype, device = flow['dtype'], flow['device']
+        garment = batch['garment'].to(device=device, dtype=dtype)
+        head_pose = batch['head_pose'].to(device=device, dtype=dtype)
+        paired_tokens = self._condition_tokens(
+            flow['prompt'],
+            batch['appearance'].to(device=device, dtype=dtype),
+            garment,
+            head_pose,
+        )
+        # ControlNet is identity-independent in A2: it sees pose, prompt, z_tau, and tau only.
+        # Reusing these samples is invalid if a future method injects identity into ControlNet.
+        cn_samples = self._controlnet_forward(
+            flow['z_tau'],
+            flow['tau'],
+            flow['prompt'],
+            flow['pooled'],
+            batch['pose_latents'],
+            flow['img_ids'],
+        )
+        pred_i = self._transformer_forward(
+            flow['z_tau'],
+            flow['tau'],
+            paired_tokens,
+            batch['pulid_id_embed'],
+            cn_samples,
+            pooled=flow['pooled'],
+            img_ids=flow['img_ids'],
+        )
+        loss_pair = F.mse_loss(pred_i.float(), flow['target_v'].float())
+        zero = torch.zeros((), device=device, dtype=torch.float32)
+        metrics = self._base_metrics(batch, flow)
+        tau_min = float(self.diff_cfg.get('tau_min', 0.2))
+        tau_max = float(self.diff_cfg.get('tau_max', 0.8))
+        diff_every = max(1, int(self.diff_cfg.get('diff_every', 1)))
+        scheduled = train_step % diff_every == 0
+        active = (flow['tau'].float() >= tau_min) & (flow['tau'].float() <= tau_max)
+        if not scheduled:
+            active = torch.zeros_like(active)
+
+        loss_teach = zero
+        loss_inv = zero
+        loss_hinge = zero
+        face_diff_mean = zero
+        hinge_active_rate = zero
+        calibration_ratios = torch.empty((0,), device=device, dtype=torch.float32)
+        transformer_count = 1.0
+        if bool(active.any()):
+            tokens_j = self._condition_tokens(
+                flow['prompt'],
+                batch['cf_j_appearance'].to(device=device, dtype=dtype),
+                garment,
+                head_pose,
             )
-        self.pulid.set_context(batch['pulid_id_embed'].to(device=device, dtype=dtype), float(self.cfg.get('model', {}).get('pulid', {}).get('id_weight', 1.0)))
-        pred = self.transformer(
-            hidden_states=z_tau,
-            encoder_hidden_states=encoder_hidden_states,
-            pooled_projections=pooled,
-            timestep=model_timestep,
-            img_ids=img_ids,
-            txt_ids=txt_ids,
-            guidance=torch.full((z0.shape[0],), 3.5, device=device, dtype=dtype),
-            controlnet_block_samples=cn.controlnet_block_samples,
-            controlnet_single_block_samples=cn.controlnet_single_block_samples,
-            return_dict=True,
-        ).sample
-        loss = F.mse_loss(pred.float(), target_v.float())
-        head_null = batch.get('head_pose_is_null')
-        head_null_ratio = head_null.float().mean().detach() if head_null is not None else torch.zeros((), device=device, dtype=torch.float32)
-        gate_metrics = {name: torch.tensor(value, device=device, dtype=torch.float32) for name, value in self.adapter.gate_values().items()}
-        return loss, {'loss_pair': loss.detach(), 'head_pose_null_ratio': head_null_ratio, **gate_metrics}
+            tokens_k = self._condition_tokens(
+                flow['prompt'],
+                batch['cf_k_appearance'].to(device=device, dtype=dtype),
+                garment,
+                head_pose,
+            )
+            pred_j = self._transformer_forward(
+                flow['z_tau'],
+                flow['tau'],
+                tokens_j,
+                batch['cf_j_pulid_id_embed'],
+                cn_samples,
+                pooled=flow['pooled'],
+                img_ids=flow['img_ids'],
+            )
+            pred_k = self._transformer_forward(
+                flow['z_tau'],
+                flow['tau'],
+                tokens_k,
+                batch['cf_k_pulid_id_embed'],
+                cn_samples,
+                pooled=flow['pooled'],
+                img_ids=flow['img_ids'],
+            )
+            transformer_count = 3.0
+            tau_view = flow['tau'].float().view(-1, 1, 1)
+            z_hat_j = flow['z_tau'].float() - tau_view * pred_j.float()
+            z_hat_k = flow['z_tau'].float() - tau_view * pred_k.float()
+            teach_j = self._masked_l1_per_sample(
+                z_hat_j - flow['z0'].float(), batch['cloth_safe_z']
+            )
+            teach_k = self._masked_l1_per_sample(
+                z_hat_k - flow['z0'].float(), batch['cloth_safe_z']
+            )
+            teach_per = 0.5 * (teach_j + teach_k)
+            inv_per = self._masked_l1_per_sample(z_hat_j - z_hat_k, batch['body_bg_z'])
+            face_per = self._masked_l1_per_sample(z_hat_j - z_hat_k, batch['face_z'])
+            delta_arc = batch['delta_arc_jk'].to(device=device, dtype=torch.float32).reshape(-1)
+            loss_teach = self._active_mean(teach_per, active)
+            loss_inv = self._active_mean(inv_per, active)
+            face_diff_mean = self._active_mean(face_per, active)
+            valid_ratio = active & (delta_arc > 1e-6)
+            calibration_ratios = (face_per[valid_ratio] / delta_arc[valid_ratio]).detach()
+            if self.hinge_g is not None:
+                margin = float(self.hinge_g) * delta_arc
+                hinge_per = F.relu(margin - face_per)
+                loss_hinge = self._active_mean(hinge_per, active)
+                hinge_active_rate = self._active_mean((hinge_per > 0).float(), active)
+
+        calibrating = self.hinge_g is None
+        lambda_teach = float(self.diff_cfg.get('lambda_teach', 0.5))
+        lambda_inv = float(self.diff_cfg.get('lambda_inv', 0.2))
+        lambda_hinge = 0.0 if calibrating else float(self.diff_cfg.get('lambda_hinge', 0.05))
+        total = (
+            loss_pair
+            + lambda_teach * loss_teach
+            + lambda_inv * loss_inv
+            + lambda_hinge * loss_hinge
+        )
+        metrics.update({
+            'loss_total': total.detach(),
+            'loss_pair': loss_pair.detach(),
+            'loss_teach': loss_teach.detach(),
+            'loss_inv': loss_inv.detach(),
+            'loss_hinge': loss_hinge.detach(),
+            'hinge_active_rate': hinge_active_rate.detach(),
+            'face_diff_norm': face_diff_mean.detach(),
+            'diff_active_ratio': active.float().mean().detach(),
+            'hinge_calibrating': torch.tensor(float(calibrating), device=device),
+            'hinge_g': torch.tensor(float(self.hinge_g or 0.0), device=device),
+            'transformer_forward_count': torch.tensor(transformer_count, device=device),
+            'calibration_ratios': calibration_ratios,
+        })
+        return total, metrics
 
 
 def setup_dist() -> tuple[int, int, int]:
@@ -134,6 +426,7 @@ def load_components(cfg: dict[str, Any], device: torch.device, dtype: torch.dtyp
     pulid.attach_to_transformer(transformer)
     pulid_delta_l2 = pulid.self_check(device=device, dtype=dtype)
     pulid_transformer_l2 = pulid.transformer_self_check(transformer, device=device, dtype=dtype)
+    pulid_context_switch_l2 = float(getattr(pulid, '_last_transformer_context_switch_l2', 0.0))
     threshold = float(cfg['model']['pulid'].get('self_check_min_l2', 1.0))
     if pulid_delta_l2 <= threshold:
         raise RuntimeError(f'PuLID CA startup self-check failed: delta_l2={pulid_delta_l2:.6f} <= {threshold}')
@@ -146,6 +439,11 @@ def load_components(cfg: dict[str, Any], device: torch.device, dtype: torch.dtyp
             f'out0_norm={getattr(pulid, "_last_transformer_out0_norm", "na")}, '
             f'out1_norm={getattr(pulid, "_last_transformer_out1_norm", "na")}'
         )
+    if pulid_context_switch_l2 <= threshold:
+        raise RuntimeError(
+            'PuLID i/j context-switch self-check failed: '
+            f'delta_l2={pulid_context_switch_l2:.6f} <= {threshold}'
+        )
     return transformer, controlnet, vae, adapter, pulid, {
         'controlnet': control_info,
         'lora': lora_note,
@@ -153,6 +451,7 @@ def load_components(cfg: dict[str, Any], device: torch.device, dtype: torch.dtyp
         'pulid': pulid.launch_note(),
         'pulid_ca_self_check_l2': pulid_delta_l2,
         'pulid_transformer_self_check_l2': pulid_transformer_l2,
+        'pulid_context_switch_self_check_l2': pulid_context_switch_l2,
     }
 
 
@@ -288,6 +587,47 @@ def maybe_probe_micro_batch(
             print(f'[rank0] micro-batch probe fallback: keep micro={current}; reason={reason}', flush=True)
 
 
+def unwrap_model(module: torch.nn.Module) -> WarmupFlowModel:
+    return module.module if hasattr(module, 'module') else module
+
+
+def accumulate_scalar_metrics(
+    totals: dict[str, float],
+    counts: dict[str, int],
+    metrics: dict[str, torch.Tensor],
+) -> None:
+    for name, value in metrics.items():
+        if not isinstance(value, torch.Tensor) or value.numel() != 1:
+            continue
+        scalar = float(value.detach().float().cpu())
+        totals[name] = totals.get(name, 0.0) + scalar
+        counts[name] = counts.get(name, 0) + 1
+
+
+def averaged_metrics(totals: dict[str, float], counts: dict[str, int]) -> dict[str, float]:
+    return {name: totals[name] / max(1, counts[name]) for name in totals}
+
+
+def calibrate_hinge_g(local_ratios: list[float], device: torch.device) -> tuple[float, int]:
+    gathered: list[list[float] | None]
+    if dist.is_initialized():
+        gathered = [None for _ in range(dist.get_world_size())]
+        dist.all_gather_object(gathered, local_ratios)
+        values = [value for rows in gathered if rows for value in rows]
+    else:
+        values = list(local_ratios)
+    if not values:
+        raise RuntimeError('hinge g calibration collected no valid face_diff/d_arc ratios')
+    result = torch.tensor(
+        [float(np.quantile(np.asarray(values, dtype=np.float64), 0.25)), float(len(values))],
+        device=device,
+        dtype=torch.float64,
+    )
+    if dist.is_initialized():
+        dist.broadcast(result, src=0)
+    return float(result[0].item()), int(result[1].item())
+
+
 def save_checkpoint(path: Path, model: WarmupFlowModel, optimizer, step: int, sampler: ResumeDistributedSampler, cfg: dict[str, Any]) -> None:
     from peft import get_peft_model_state_dict
     path.mkdir(parents=True, exist_ok=True)
@@ -298,7 +638,10 @@ def save_checkpoint(path: Path, model: WarmupFlowModel, optimizer, step: int, sa
         'optimizer': optimizer.state_dict(),
         'sampler': sampler.state_dict(),
         'config': cfg,
+        'continuation_origin_step': model.run_origin_step,
     }
+    if hasattr(model, 'differential_state_dict'):
+        payload['differential_state'] = model.differential_state_dict()
     atomic_torch_save(payload, path / 'trainable.pt')
     (path / 'READY').write_text(str(step), encoding='utf-8')
 
@@ -318,6 +661,10 @@ def load_checkpoint(path: Path, model: WarmupFlowModel, optimizer=None, sampler=
         optimizer.load_state_dict(payload['optimizer'])
     if sampler is not None and 'sampler' in payload:
         sampler.load_state_dict(payload['sampler'])
+    if 'differential_state' in payload and hasattr(model, 'load_differential_state'):
+        model.load_differential_state(payload['differential_state'])
+    if payload.get('continuation_origin_step') is not None:
+        model.run_origin_step = int(payload['continuation_origin_step'])
     return int(payload.get('step', 0))
 
 
@@ -358,11 +705,16 @@ def train(args: argparse.Namespace) -> None:
         cfg['training']['resume'] = str(args.resume)
     if args.override_total_steps is not None:
         cfg['training']['total_steps'] = int(args.override_total_steps)
+        if 'additional_steps' in cfg['training']:
+            cfg['training']['additional_steps'] = int(args.override_total_steps)
     if args.smoke_steps > 0:
         cfg['training']['total_steps'] = int(args.smoke_steps)
         cfg['_runtime']['grad_accum'] = 1
         cfg['_runtime']['global_batch'] = world_size * int(cfg['_runtime']['micro_batch'])
         cfg['_runtime']['effective_lr'] = float(cfg['training']['baseline_lr']) * cfg['_runtime']['global_batch'] / int(cfg['training']['baseline_global_batch'])
+        differential_cfg = cfg.get('training', {}).get('differential', {})
+        if differential_cfg.get('enabled', False) and differential_cfg.get('hinge_g_resolved') is None:
+            differential_cfg['hinge_g_resolved'] = float(differential_cfg.get('smoke_hinge_g', 1.0))
     seed_everything(int(cfg['experiment']['seed']) + rank)
     torch.cuda.set_device(local_rank)
     device = torch.device(f'cuda:{local_rank}')
@@ -379,7 +731,9 @@ def train(args: argparse.Namespace) -> None:
             print(f'[rank0] allow_partial_cache: using {len(dataset.ids)} cached train samples for smoke only', flush=True)
     sampler = ResumeDistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True, seed=int(cfg['experiment']['seed']))
     transformer, controlnet, vae, adapter, pulid, load_notes = load_components(cfg, device, dtype)
-    model = WarmupFlowModel(transformer, controlnet, adapter, pulid, cfg)
+    differential_enabled = bool(cfg.get('training', {}).get('differential', {}).get('enabled', False))
+    model_cls = DifferentialFlowModel if differential_enabled else WarmupFlowModel
+    model = model_cls(transformer, controlnet, adapter, pulid, cfg)
     if not args.smoke_steps:
         maybe_probe_micro_batch(model, dataset, cfg, world_size, rank, device)
     loader = make_loader(dataset, sampler, cfg)
@@ -401,10 +755,47 @@ def train(args: argparse.Namespace) -> None:
     start_step = 0
     if cfg['training'].get('resume'):
         start_step = load_checkpoint(Path(cfg['training']['resume']), ddp.module if hasattr(ddp, 'module') else ddp, optimizer, sampler)
+    core_model = unwrap_model(ddp)
+    core_model.set_run_origin_step(start_step)
+    run_origin_step = int(core_model.run_origin_step if core_model.run_origin_step is not None else start_step)
+    if args.smoke_steps > 0:
+        target_step = start_step + int(args.smoke_steps)
+    elif cfg['training'].get('additional_steps') is not None:
+        target_step = run_origin_step + int(cfg['training']['additional_steps'])
+    else:
+        target_step = int(cfg['training']['total_steps'])
+    if target_step < start_step:
+        raise RuntimeError(
+            f'target step {target_step} is behind resume step {start_step}; '
+            'use training.additional_steps for continuation runs'
+        )
+    cfg['_runtime'].update({
+        'resume_step': start_step,
+        'run_origin_step': run_origin_step,
+        'target_step': target_step,
+        'continuation_steps': target_step - run_origin_step,
+        'differential_enabled': differential_enabled,
+    })
+    resume_path = Path(cfg['training']['resume']) if cfg['training'].get('resume') else None
+    resume_hash = (
+        sha256_file(resume_path / 'trainable.pt')[:16]
+        if resume_path is not None and (resume_path / 'trainable.pt').exists()
+        else None
+    )
     if rank == 0:
         output.mkdir(parents=True, exist_ok=True)
         save_yaml(output / 'resolved_config.yaml', cfg)
-        (output / 'launch.json').write_text(json.dumps({'load_notes': load_notes, 'base_hash': short_hash_path(cfg['model']['base']), 'rank0_device': torch.cuda.get_device_name(local_rank)}, indent=2, ensure_ascii=False), encoding='utf-8')
+        (output / 'launch.json').write_text(json.dumps({
+            'load_notes': load_notes,
+            'base_hash': short_hash_path(cfg['model']['base']),
+            'rank0_device': torch.cuda.get_device_name(local_rank),
+            'resume_checkpoint': str(resume_path) if resume_path else None,
+            'resume_trainable_hash': resume_hash,
+            'resume_sampler_state': sampler.state_dict(),
+            'run_origin_step': run_origin_step,
+            'target_step': target_step,
+            'fairness_note': 'A2 and B2-cont must use the same resume checkpoint/hash, seed, sampler state, global batch, LR, and continuation step count.',
+        }, indent=2, ensure_ascii=False), encoding='utf-8')
         print(f'[rank0] runtime={cfg["_runtime"]}', flush=True)
         print(f'[rank0] controlnet={load_notes["controlnet"]}', flush=True)
         print('[rank0] optimizer_groups=' + json.dumps([
@@ -430,13 +821,28 @@ def train(args: argparse.Namespace) -> None:
     optimizer.zero_grad(set_to_none=True)
     micro_step = 0
     stopped_by_watcher = False
-    while global_step < int(cfg['training']['total_steps']) and not stopped_by_watcher:
+    metric_totals: dict[str, float] = {}
+    metric_counts: dict[str, int] = {}
+    calibration_ratios: list[float] = []
+    calibration_steps = int(
+        cfg.get('training', {}).get('differential', {}).get('calibration_steps', 0)
+    )
+    while global_step < target_step and not stopped_by_watcher:
         sampler.set_epoch(global_step // max(1, len(loader)))
         for batch_idx, batch in enumerate(loader):
             if benchmark_start is None:
                 torch.cuda.reset_peak_memory_stats(device)
                 benchmark_start = time.perf_counter()
-            loss, metrics = ddp(batch)
+            run_step = global_step - run_origin_step
+            if args.smoke_steps > 0 and differential_enabled and run_step == 0:
+                batch = dict(batch)
+                batch_size = int(batch['target_latents'].shape[0])
+                batch['tau_override'] = torch.full((batch_size,), 0.5, dtype=torch.float32)
+            loss, metrics = ddp(batch, train_step=run_step)
+            accumulate_scalar_metrics(metric_totals, metric_counts, metrics)
+            ratios = metrics.get('calibration_ratios')
+            if isinstance(ratios, torch.Tensor) and ratios.numel():
+                calibration_ratios.extend(ratios.detach().float().cpu().tolist())
             (loss / accum).backward()
             micro_step += 1
             if micro_step % accum != 0:
@@ -445,38 +851,92 @@ def train(args: argparse.Namespace) -> None:
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
             global_step += 1
-            if rank == 0 and (global_step % int(cfg['training']['log_every']) == 0 or global_step <= 3):
+            completed_run_steps = global_step - run_origin_step
+            core_model = unwrap_model(ddp)
+            if (
+                isinstance(core_model, DifferentialFlowModel)
+                and core_model.hinge_g is None
+                and completed_run_steps >= calibration_steps
+            ):
+                hinge_g, calibration_count = calibrate_hinge_g(calibration_ratios, device)
+                core_model.set_hinge_g(hinge_g)
+                cfg['training']['differential']['hinge_g_resolved'] = hinge_g
+                if rank == 0:
+                    save_yaml(output / 'resolved_config.yaml', cfg)
+                    (log_dir / 'hinge_calibration.json').write_text(json.dumps({
+                        'completed_run_steps': completed_run_steps,
+                        'samples': calibration_count,
+                        'quantile': 0.25,
+                        'definition': 'Q25(face_diff_norm / d_arc_jk), yielding about 25% initial hinge activation',
+                        'hinge_g': hinge_g,
+                    }, indent=2), encoding='utf-8')
+                    print(
+                        f'[rank0] hinge calibration complete: g={hinge_g:.6f}, samples={calibration_count}',
+                        flush=True,
+                    )
+            step_metrics = averaged_metrics(metric_totals, metric_counts)
+            metric_totals.clear()
+            metric_counts.clear()
+            if rank == 0 and (
+                global_step % int(cfg['training']['log_every']) == 0
+                or completed_run_steps <= 3
+            ):
                 log_dir.mkdir(parents=True, exist_ok=True)
-                row = {'step': global_step, 'loss_pair': float(metrics['loss_pair'].float().cpu()), 'head_pose_null_ratio': float(metrics.get('head_pose_null_ratio', torch.tensor(0.0)).float().cpu()), 'lr': cfg['_runtime']['effective_lr'], 'peak_gib': torch.cuda.max_memory_allocated(device) / 1024**3}
-                for gate_name in ('appearance_gate', 'garment_gate', 'head_pose_gate'):
-                    if gate_name in metrics:
-                        row[gate_name] = float(metrics[gate_name].float().cpu())
+                row = {
+                    'step': global_step,
+                    'run_step': completed_run_steps,
+                    'lr': cfg['_runtime']['effective_lr'],
+                    'peak_gib': torch.cuda.max_memory_allocated(device) / 1024**3,
+                    'sample_ids': list(batch.get('sample_id', [])),
+                }
+                for name in (
+                    'loss_total', 'loss_pair', 'loss_teach', 'loss_inv', 'loss_hinge',
+                    'hinge_active_rate', 'face_diff_norm', 'diff_active_ratio',
+                    'hinge_calibrating', 'hinge_g', 'head_pose_null_ratio',
+                    'tau_mean', 'z1_mean', 'controlnet_forward_count',
+                    'transformer_forward_count', 'appearance_gate', 'garment_gate',
+                    'head_pose_gate',
+                ):
+                    if name in step_metrics:
+                        row[name] = step_metrics[name]
+                if isinstance(core_model, DifferentialFlowModel) and core_model.hinge_g is not None:
+                    row['hinge_g'] = float(core_model.hinge_g)
                 with (log_dir / 'train.jsonl').open('a', encoding='utf-8') as handle:
                     handle.write(json.dumps(row, ensure_ascii=False) + '\n')
                 print(f'[rank0] {row}', flush=True)
-            if not benchmark_done and global_step >= int(cfg['training']['benchmark_steps']):
+            if not benchmark_done and completed_run_steps >= int(cfg['training']['benchmark_steps']):
                 elapsed = time.perf_counter() - benchmark_start
                 imgs = int(cfg['_runtime']['global_batch']) * int(cfg['training']['benchmark_steps'])
-                bench = {'steps': int(cfg['training']['benchmark_steps']), 'seconds': elapsed, 'img_per_sec': imgs / elapsed, 'peak_gib': torch.cuda.max_memory_allocated(device) / 1024**3, 'estimated_6000_step_hours': elapsed / int(cfg['training']['benchmark_steps']) * 6000 / 3600}
+                per_step = elapsed / int(cfg['training']['benchmark_steps'])
+                bench = {
+                    'steps': int(cfg['training']['benchmark_steps']),
+                    'seconds': elapsed,
+                    'seconds_per_optimizer_step': per_step,
+                    'img_per_sec': imgs / elapsed,
+                    'peak_gib': torch.cuda.max_memory_allocated(device) / 1024**3,
+                    'estimated_continuation_hours': per_step * int(cfg['_runtime']['continuation_steps']) / 3600,
+                    'target_step': target_step,
+                }
                 if rank == 0:
                     (log_dir / 'benchmark.json').write_text(json.dumps(bench, indent=2), encoding='utf-8')
                     print(f'[rank0] benchmark={bench}', flush=True)
                 benchmark_done = True
             if rank == 0 and global_step % int(cfg['training']['checkpoint_every']) == 0:
-                save_checkpoint(ckpt_dir / f'step-{global_step:06d}', ddp.module if hasattr(ddp, 'module') else ddp, optimizer, global_step, sampler, cfg)
+                save_checkpoint(ckpt_dir / f'step-{global_step:06d}', core_model, optimizer, global_step, sampler, cfg)
             if sync_stop_requested(stop_marker, rank, device):
                 stopped_by_watcher = True
                 if rank == 0:
                     print(f'[rank0] watcher requested stop at step={global_step}: {stop_marker}', flush=True)
                 break
-            if global_step >= int(cfg['training']['total_steps']):
+            if global_step >= target_step:
                 break
     if rank == 0 and cfg['training'].get('save_final', True):
-        save_checkpoint(ckpt_dir / 'final', ddp.module if hasattr(ddp, 'module') else ddp, optimizer, global_step, sampler, cfg)
+        save_checkpoint(ckpt_dir / 'final', unwrap_model(ddp), optimizer, global_step, sampler, cfg)
         (output / 'training_status.json').write_text(json.dumps({
             'status': 'stopped_by_watcher' if stopped_by_watcher else 'complete',
             'step': global_step,
-            'target_steps': int(cfg['training']['total_steps']),
+            'run_step': global_step - run_origin_step,
+            'target_steps': target_step,
             'stop_marker': str(stop_marker) if stopped_by_watcher else None,
         }, indent=2), encoding='utf-8')
     cleanup_dist()

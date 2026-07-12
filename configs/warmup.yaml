@@ -62,6 +62,7 @@ cache:
   arcface_model_root: /data/muxiangyu/modelLibrary/insightface
   arcface_helper_python: /home/muxiangyu/miniconda3/envs/imagdressing_m2h/bin/python
   arcface_helper_script: /data/muxiangyu/pythonPrograms/M2HImage/tools/arcface_embed_server.py
+  arcface_bank_helper_script: /data/muxiangyu/pythonPrograms/M2HImage/tools/arcface_bank_server.py
   heldout_face_model: /data/muxiangyu/modelLibrary/insightface/models/antelopev2
   head_crop_debug_count: 20
 training:

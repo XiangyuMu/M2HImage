@@ -1,0 +1,42 @@
+extends: warmup.yaml
+
+experiment:
+  id: phase2_a2_diff_r16_4000_768x1024
+  wandb_run_id: phase2_a2_diff_r16_4000_768x1024
+
+data:
+  region_masks_z_dir: derived/region_masks_z
+  identity_bank: derived/identity_bank.npz
+
+training:
+  total_steps: 4000
+  additional_steps: 4000
+  resume: /data/muxiangyu/datasets/M2HImage/M2H_Final_v2/phase1/phase1_warmup_b2p_pulid_gatefix_resume_768x1024/checkpoints/final
+  lr_schedule: constant
+  differential:
+    enabled: true
+    lambda_teach: 0.5
+    lambda_inv: 0.2
+    lambda_hinge: 0.05
+    tau_min: 0.2
+    tau_max: 0.8
+    diff_every: 1
+    calibration_steps: 200
+    hinge_g: null
+    hinge_g_resolved: null
+    smoke_hinge_g: 1.0
+    collapse_window_steps: 500
+    collapse_drop_fraction: 0.30
+    decode:
+      enabled: false
+      note: A2 has no VAE decode in training.
+    identity_loss:
+      enabled: false
+      note: Reserved for A4 directional contrast; forbidden in A2.
+
+eval:
+  b2_output_dir: eval/a2_gen
+  report_path: eval/a2_report.md
+
+metrics:
+  output_dir: eval/a2_metrics

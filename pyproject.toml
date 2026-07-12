@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "m2himage"
-version = "0.2.0"
-description = "FLUX Phase 1 paired warmup and B2 baseline code for M2HImage."
+version = "0.3.0"
+description = "FLUX paired warmup, A2 differential training, and B2/A2 gate evaluation for M2HImage."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -20,6 +20,7 @@ dependencies = [
   "diffusers",
   "insightface",
   "lpips==0.1.4",
+  "matplotlib",
   "numpy",
   "opencv-python",
   "peft",
@@ -27,6 +28,7 @@ dependencies = [
   "PyYAML",
   "safetensors",
   "scikit-image",
+  "scipy",
   "torch",
   "torchvision",
   "tqdm",
@@ -42,11 +44,14 @@ dev = ["pytest", "ruff"]
 packages = ["metrics"]
 py-modules = [
   "build_cache",
+  "build_identity_bank",
+  "build_region_masks_z",
   "conditions",
   "dataset",
   "eval_b2",
   "eval_b2_metrics",
   "eval_b2_make_vis",
+  "eval_gate_report",
   "eval_watcher",
   "pulid_flux",
   "speed_bench",

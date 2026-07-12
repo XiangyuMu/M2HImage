@@ -100,6 +100,9 @@ class PuLIDFluxAdapter(nn.Module):
         self._context_weight: float = self.id_weight
         self.weight_hash = sha256_file(self.weight_path)[:16]
 
+    _CONTEXT_ID_KEY = '_m2h_pulid_id_embedding'
+    _CONTEXT_WEIGHT_KEY = '_m2h_pulid_id_weight'
+
     def launch_note(self) -> dict[str, Any]:
         return {
             'type': 'pulid_flux_v0.9.1',
@@ -122,18 +125,31 @@ class PuLIDFluxAdapter(nn.Module):
             if block_idx % self.double_interval == 0:
                 self._wrap_block_forward(block, ca_idx)
                 ca_idx += 1
+            else:
+                self._wrap_block_forward(block, None)
         for block_idx, block in enumerate(getattr(transformer, 'single_transformer_blocks')):
             if block_idx % self.single_interval == 0:
                 self._wrap_block_forward(block, ca_idx)
                 ca_idx += 1
+            else:
+                self._wrap_block_forward(block, None)
         if ca_idx != len(self.pulid_ca):
             raise RuntimeError(f'PuLID hook count mismatch: hooks={ca_idx}, ca_modules={len(self.pulid_ca)}')
 
-    def _wrap_block_forward(self, block: nn.Module, ca_idx: int) -> None:
+    def _wrap_block_forward(self, block: nn.Module, ca_idx: int | None) -> None:
         original_forward = block.forward
 
         def forward_with_pulid(*args, **kwargs):
-            return self._apply_pulid_residual(ca_idx, original_forward(*args, **kwargs))
+            args, kwargs, id_embedding, id_weight = self._extract_block_context(args, kwargs)
+            output = original_forward(*args, **kwargs)
+            if ca_idx is None:
+                return output
+            return self._apply_pulid_residual(
+                ca_idx,
+                output,
+                id_embedding=id_embedding,
+                id_weight=id_weight,
+            )
 
         block.forward = forward_with_pulid
         self._original_forwards.append((block, original_forward))
@@ -146,22 +162,58 @@ class PuLIDFluxAdapter(nn.Module):
         self._context_id = id_embedding
         self._context_weight = self.id_weight if id_weight is None else float(id_weight)
 
+    def context_kwargs(self) -> dict[str, Any]:
+        if self._context_id is None:
+            raise RuntimeError('PuLID context is not set')
+        return {
+            self._CONTEXT_ID_KEY: self._context_id,
+            self._CONTEXT_WEIGHT_KEY: float(self._context_weight),
+        }
+
     def clear_context(self) -> None:
         self._context_id = None
 
-    def _apply_pulid_residual(self, ca_idx: int, output):
-        if self._context_id is None:
+    def _extract_block_context(self, args, kwargs):
+        args = list(args)
+        kwargs = dict(kwargs)
+        joint = kwargs.get('joint_attention_kwargs')
+        joint_position = None
+        if joint is None and len(args) >= 5:
+            joint_position = 4
+            joint = args[joint_position]
+        id_embedding = self._context_id
+        id_weight = self._context_weight
+        if joint:
+            clean_joint = dict(joint)
+            id_embedding = clean_joint.pop(self._CONTEXT_ID_KEY, id_embedding)
+            id_weight = float(clean_joint.pop(self._CONTEXT_WEIGHT_KEY, id_weight))
+            if joint_position is None:
+                kwargs['joint_attention_kwargs'] = clean_joint or None
+            else:
+                args[joint_position] = clean_joint or None
+        return tuple(args), kwargs, id_embedding, id_weight
+
+    def _apply_pulid_residual(
+        self,
+        ca_idx: int,
+        output,
+        id_embedding: torch.Tensor | None = None,
+        id_weight: float | None = None,
+    ):
+        id_embedding = self._context_id if id_embedding is None else id_embedding
+        if id_embedding is None:
             return output
         if not isinstance(output, tuple) or len(output) != 2:
             return output
         encoder_hidden_states, hidden_states = output
-        id_embedding = self._context_id.to(device=hidden_states.device, dtype=hidden_states.dtype)
+        id_embedding = id_embedding.to(device=hidden_states.device, dtype=hidden_states.dtype)
         if id_embedding.shape[0] == 1 and hidden_states.shape[0] != 1:
             id_embedding = id_embedding.expand(hidden_states.shape[0], -1, -1)
         delta = self.pulid_ca[ca_idx](id_embedding, hidden_states)
         self._debug_hook_calls += 1
         self._debug_delta_norm += float(torch.norm(delta.detach().float()).item())
-        hidden_states = hidden_states + float(self._context_weight) * delta
+        weight = self._context_weight if id_weight is None else float(id_weight)
+        hidden_states = hidden_states + float(weight) * delta
         return encoder_hidden_states, hidden_states
 
     def _make_hook(self, ca_idx: int):
@@ -201,6 +253,7 @@ class PuLIDFluxAdapter(nn.Module):
         timestep = torch.full((1,), 0.5, device=device, dtype=dtype)
         guidance = torch.full((1,), 3.5, device=device, dtype=dtype)
         id_embedding = torch.randn(1, 32, 2048, device=device, dtype=dtype, generator=generator)
+        other_id_embedding = torch.randn(1, 32, 2048, device=device, dtype=dtype, generator=generator)
         self._debug_hook_calls = 0
         self._debug_delta_norm = 0.0
         self.set_context(id_embedding, id_weight=0.0)
@@ -212,6 +265,7 @@ class PuLIDFluxAdapter(nn.Module):
             img_ids=img_ids,
             txt_ids=ids,
             guidance=guidance,
+            joint_attention_kwargs=self.context_kwargs(),
             return_dict=True,
         ).sample.detach().clone()
         calls_after_zero = self._debug_hook_calls
@@ -227,14 +281,29 @@ class PuLIDFluxAdapter(nn.Module):
             img_ids=img_ids,
             txt_ids=ids,
             guidance=guidance,
+            joint_attention_kwargs=self.context_kwargs(),
             return_dict=True,
         ).sample.detach().clone()
+        self.set_context(other_id_embedding, id_weight=self.id_weight)
+        out2 = transformer(
+            hidden_states=hidden.clone(),
+            encoder_hidden_states=encoder.clone(),
+            pooled_projections=pooled,
+            timestep=timestep,
+            img_ids=img_ids,
+            txt_ids=ids,
+            guidance=guidance,
+            joint_attention_kwargs=self.context_kwargs(),
+            return_dict=True,
+        ).sample.detach().clone()
+        self.clear_context()
         self._last_transformer_out0_norm = float(torch.norm(out0.float()).item())
         self._last_transformer_out1_norm = float(torch.norm(out1.float()).item())
         self._last_transformer_hook_calls = self._debug_hook_calls
         self._last_transformer_delta_norm = self._debug_delta_norm
         self._last_transformer_zero_hook_calls = calls_after_zero
         self._last_transformer_zero_delta_norm = delta_after_zero
+        self._last_transformer_context_switch_l2 = float(torch.norm((out2 - out1).float()).item())
         return float(torch.norm((out1 - out0).float()).item())
 
 

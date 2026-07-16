@@ -1,0 +1,111 @@
+{
+  "verdict": "FAIL: 差分无增量——停止堆 loss，回到方案层重估差分的价值锚点（姿势方差/弱身份区/更难身份对），先出诊断再决定 A3/A4 是否继续",
+  "fairness": {
+    "a2_run": "/data/muxiangyu/datasets/M2HImage/M2H_Final_v2/phase1/phase2_a2_diff_r16_4000_768x1024",
+    "b2cont_run": "/data/muxiangyu/datasets/M2HImage/M2H_Final_v2/phase1/phase2_b2_cont_r16_4000_768x1024",
+    "fields": {
+      "resume_trainable_hash": [
+        "c4638ff746e792e9",
+        "c4638ff746e792e9"
+      ],
+      "resume_sampler_state": [
+        {
+          "epoch": 0
+        },
+        {
+          "epoch": 0
+        }
+      ],
+      "train_ids_hash": [
+        "45c2b3d6ee738f81",
+        "45c2b3d6ee738f81"
+      ],
+      "train_sample_count": [
+        36033,
+        36033
+      ],
+      "excluded_train_ids": [
+        [
+          "47160"
+        ],
+        [
+          "47160"
+        ]
+      ],
+      "seed": [
+        20260706,
+        20260706
+      ],
+      "global_batch": [
+        18,
+        18
+      ],
+      "effective_lr": [
+        5.6250000000000005e-05,
+        5.6250000000000005e-05
+      ],
+      "continuation_steps": [
+        4000,
+        4000
+      ],
+      "lora_rank": [
+        16,
+        16
+      ],
+      "lr_schedule": [
+        "constant",
+        "constant"
+      ]
+    },
+    "mismatches": {},
+    "comparison": "A2 vs B2-cont is the decision comparison; B2-prime is reference only."
+  },
+  "garment_distribution": {
+    "A2": {
+      "mean": 0.9015696835092135,
+      "p10": 0.860406048808779,
+      "p25": 0.8834798548902784,
+      "p50": 0.9086150505713054,
+      "p75": 0.9299994494233812,
+      "bottom_quartile_mean": 0.8468572345081267
+    },
+    "B2-cont": {
+      "mean": 0.8950915493283954,
+      "p10": 0.844522244163922,
+      "p25": 0.8793637502406324,
+      "p50": 0.9010023102164268,
+      "p75": 0.9208129016416413,
+      "bottom_quartile_mean": 0.8405592081310986
+    },
+    "B2' ref": {
+      "mean": 0.8621901166864804,
+      "p10": 0.8069542918886456,
+      "p25": 0.8313559373574597,
+      "p50": 0.863992446235248,
+      "p75": 0.8966535505439555,
+      "bottom_quartile_mean": 0.807274765038228
+    }
+  },
+  "garment_test": {
+    "count": 50,
+    "p_value": 0.06648027807928525,
+    "rank_biserial": 0.24549019607843137,
+    "mean_delta": 0.006478134180818282
+  },
+  "garment_tail_gain": 0.006298026377028032,
+  "pose_test": {
+    "count": 50,
+    "p_value": 0.05368800287805087,
+    "rank_biserial": 0.2627450980392157,
+    "mean_delta": -1.5074014297391256
+  },
+  "deltaid_regression_test": {
+    "count": 400,
+    "p_value": 0.9999973534239194,
+    "rank_biserial": 0.2626932668329177,
+    "mean_delta": 0.011327065374061931
+  },
+  "identity_regression": false,
+  "report": "/data/muxiangyu/datasets/M2HImage/M2H_Final_v2/eval/gate_report.md",
+  "histogram": "/data/muxiangyu/datasets/M2HImage/M2H_Final_v2/eval/gate_garment_per_mid_hist.png"
+}

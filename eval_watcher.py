@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -342,7 +344,23 @@ def main() -> None:
             ckpt = marker.parent
             if str(ckpt) in seen:
                 continue
-            run_once(args.config, ckpt, args.device)
+            # A fresh process per checkpoint guarantees that FLUX, ControlNet, VAE,
+            # and PuLID CUDA allocations are released before the next evaluation.
+            # Reusing one process leaked references through wrapped block forwards
+            # and eventually OOMed the final watcher after long training runs.
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(__file__).resolve()),
+                    '--config',
+                    args.config,
+                    '--ckpt',
+                    str(ckpt),
+                    '--device',
+                    args.device,
+                ],
+                check=True,
+            )
             seen.add(str(ckpt))
             if ckpt.name == 'final':
                 return

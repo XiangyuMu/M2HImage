@@ -4,6 +4,7 @@ set -euo pipefail
 cd /data/muxiangyu/pythonPrograms/M2HImage
 PY=/home/muxiangyu/miniconda3/envs/refton_m2h/bin/python
 ROOT=/data/muxiangyu/datasets/M2HImage/M2H_Final_v2
+MODE="${1:-all}"
 
 run_train() {
   local config="$1"
@@ -64,8 +65,27 @@ run_eval() {
 test -f "$ROOT/derived/identity_bank.npz"
 test -f "$ROOT/derived/region_masks_z/manifest.json"
 
-run_train configs/a2_diff.yaml phase2_a2_diff_r16_4000_768x1024
-run_train configs/b2_cont.yaml phase2_b2_cont_r16_4000_768x1024
+case "$MODE" in
+  all)
+    run_train configs/a2_diff.yaml phase2_a2_diff_r16_4000_768x1024
+    run_train configs/b2_cont.yaml phase2_b2_cont_r16_4000_768x1024
+    ;;
+  --eval-only)
+    test -f "$ROOT/phase1/phase2_a2_diff_r16_4000_768x1024/checkpoints/final/READY"
+    test -f "$ROOT/phase1/phase2_b2_cont_r16_4000_768x1024/checkpoints/final/READY"
+    b2_final="$ROOT/phase1/phase2_b2_cont_r16_4000_768x1024/checkpoints/final"
+    b2_watcher_report="$ROOT/phase1/phase2_b2_cont_r16_4000_768x1024/warmup_vis/final/watcher_report.md"
+    if [[ ! -f "$b2_watcher_report" ]]; then
+      echo "[$(date '+%F %T %Z')] recovering B2-cont final watcher"
+      CUDA_VISIBLE_DEVICES=3 HF_HUB_DISABLE_XET=1 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+        "$PY" eval_watcher.py --config configs/b2_cont.yaml --ckpt "$b2_final" --device cuda:0
+    fi
+    ;;
+  *)
+    echo "usage: $0 [all|--eval-only]" >&2
+    exit 2
+    ;;
+esac
 
 run_eval configs/a2_diff.yaml phase2_a2_diff_r16_4000_768x1024 eval/a2_gen eval/a2_metrics eval/a2_report.md
 run_eval configs/b2_cont.yaml phase2_b2_cont_r16_4000_768x1024 eval/b2cont_gen eval/b2cont_metrics eval/b2cont_report.md

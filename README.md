@@ -1,6 +1,6 @@
-# M2HImage FLUX Phase 1 Warmup / B2' / A2 Differential Gate
+# M2HImage FLUX Phase 1 Warmup / B2' / A2 / A4 One-shot Gate
 
-This repository contains the FLUX.1-dev MA-RA-CDT paired warmup, B2' adapter-only baseline, and A2 differential counterfactual decision experiment.
+This repository contains the FLUX.1-dev MA-RA-CDT paired warmup, B2' adapter-only baseline, A2 differential counterfactual experiment, and the preregistered one-shot A4 identity-directed gate.
 
 ## Critical Notes
 
@@ -13,6 +13,9 @@ This repository contains the FLUX.1-dev MA-RA-CDT paired warmup, B2' adapter-onl
 - The obsolete 512 cache/results were deleted; active cache output is `phase1/cache_768x1024`.
 - A2 is judged only against the equal-step `B2-cont` continuation from the same B2' checkpoint. B2' is a reference column, not the mechanism decision comparator.
 - A2 has no canvas perturbation, VAE decode, or identity loss. Regional adaptation is implemented only by packed-token loss masks; directional identity contrast remains reserved for A4.
+- A2 failed the preregistered garment axis, but `diagnose_a2.py` found the differential losses `BOUND` and held-out DeltaID gain significant (`+0.011327`, greater-side Wilcoxon `p=2.6466e-6`). This is the fixed evidence required to proceed to A4.
+- A4 is a single final mechanism run. It adds semi-hard j/k sampling and a differentiable identity-directed decode loss, starts from the same B2' checkpoint as A2/B2-cont, and reuses the existing B2-cont as control. No third rescue training run is permitted.
+- Held-out AdaFace IR-101 is evaluation-only. A4 training uses frozen Glint360K ArcFace `glintr100.onnx`, converted to a differentiable PyTorch graph with `onnx2torch`; training code fails if an AdaFace path is configured.
 
 ## Active Files
 
@@ -20,19 +23,26 @@ This repository contains the FLUX.1-dev MA-RA-CDT paired warmup, B2' adapter-onl
 configs/warmup.yaml              FLUX Phase 1 PuLID/native-resolution config
 configs/a2_diff.yaml             A2: equal-step continuation with teach/invariance/hinge losses
 configs/b2_cont.yaml             B2-cont: equal-step paired-only continuation
+configs/a4_directed.yaml         A4: A2 losses + semi-hard sampling + directed identity decode loss
 pulid_flux.py                    frozen PuLID-FLUX v0.9.1 loader, ID embedder, transformer hook self-check
 build_cache.py                   offline latent/text/PuLID-ID/appearance/garment_grid/head-pose cache
 build_region_masks_z.py          CPU builder for cloth/body-bg/face packed-token masks
 build_identity_bank.py           resumable ArcFace/attribute bank builder
-train_paired.py                  paired and A2 differential flow training, 3-card DDP by default
+build_identity_bank_v2.py        4-GPU Glint360K ArcFace bank used by all A4 training-side identity math
+train_recognizer.py              frozen F_train loader, no-grad RetinaFace geometry, differentiable 5-point alignment
+diagnose_a2.py                   A2 binding/DeltaID/tail diagnosis and fixed proceed/stop decision
+train_paired.py                  paired, A2 differential, and A4 directed training; 3-card DDP by default
 eval_watcher.py                  checkpoint watcher with paired and identity-swap panels
 eval_b2.py                       frozen B2 subset/generation/report entry
 eval_b2_metrics.py               official offline B2 metrics: held-out DeltaID, head-pose MAE, GarmentSim
 eval_gate_report.py              A2 vs B2-cont fairness check, paired tests, tail analysis, verdict
+eval_a4_gate_report.py           one-shot identity-axis A4 vs B2-cont preregistered verdict
 scripts/sanity_flux_timestep.py  prompt-only FLUX timestep sanity check
 scripts/verify_condition_gates.py real FLUX/ControlNet/PuLID one-step gate verification
 scripts/a2_vram_probe.py         real 1x ControlNet + 3x transformer differential VRAM probe
+scripts/a4_vram_probe.py         complete A4 step probe including in-graph decode and F_train backward
 scripts/run_a2_gate.sh           sequential A2/B2-cont training, generation, metrics, gate report
+scripts/run_a4_gate.sh           unique A4 train, frozen metrics, and final PASS/FAIL/MIXED report
 scripts/run_phase1_pipeline.sh   cache check + complete gatefix pipeline
 scripts/run_gatefix_to_b2.sh     4400-step train, watcher hard gate, B2' generation and metrics
 scripts/run_b2_generation.sh     multi-GPU B2' generation helper
@@ -99,6 +109,14 @@ eval/b2p_gatefix_report.md
 ```
 
 Each watcher report includes face detection rate, ArcFace paired-vs-swap cosine, and the three condition-token gate values. At step 500 it writes a real `STOP_TRAINING` sentinel if face detection is below 95%, swap cosine is not below 0.85, or gates have not moved. DDP broadcasts that decision to every rank, saves `final`, and exits before B2'.
+
+For A4, the first two panels add two counterfactual outputs generated from the same noise:
+
+```text
+[m_i | pose | generated(c_i) | generated(c_j) | generated(c_k) | h_i]
+```
+
+The report also plots training `sim_gap`, cumulative identity-loss face-detection skip rate, and emits a top-level warning if the skip rate exceeds 50%.
 
 ## Cache Schema
 
@@ -207,6 +225,72 @@ eval/gate_report.md
 ```
 
 `eval_gate_report.py` blocks the verdict if fairness fields differ. It reports A2/B2-cont/B2' side by side, paired per-mannequin GarmentSim and pose-variance Wilcoxon tests, bottom-quartile GarmentSim, DeltaID regression, effect sizes, and the fixed PASS/MIXED/FAIL rule.
+
+## A2 Diagnosis And A4 Execution Order
+
+The committed diagnosis under `docs/results/a2_gate/diagnosis.md` is the only transition gate into A4:
+
+```text
+differential binding: BOUND
+resolved hinge_g: 0.0291450452
+hinge activation mean: 12.89%
+held-out DeltaID gain: +0.011327
+greater-side Wilcoxon p: 2.6466e-6
+decision: PROCEED
+```
+
+1. Re-run the diagnosis only to verify immutable inputs. A `NOT-SIGNIFICANT` result stops A4.
+
+```bash
+/home/muxiangyu/miniconda3/envs/refton_m2h/bin/python diagnose_a2.py
+```
+
+2. Build the training-recognizer identity bank on four GPUs. Tight face crops are uniformly padded, enlarged, RetinaFace-aligned, and embedded by frozen Glint360K ArcFace. The builder is resumable and fails on any missing identity.
+
+```bash
+/home/muxiangyu/miniconda3/envs/refton_m2h/bin/python -m torch.distributed.run \
+  --nproc_per_node=4 build_identity_bank_v2.py --config configs/a4_directed.yaml --batch-size 64
+```
+
+Output: `derived/identity_bank_v2.npz`. This bank supplies semi-hard distances, hinge calibration, and A4 identity references. It is never sent into FLUX as a condition.
+
+3. Probe the complete triggered A4 step. The adopted row must be at most 44 GiB.
+
+```bash
+CUDA_VISIBLE_DEVICES=0 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+/home/muxiangyu/miniconda3/envs/refton_m2h/bin/python scripts/a4_vram_probe.py \
+  --config configs/a4_directed.yaml --device cuda:0
+```
+
+Measured result: full-resolution decode peaked at `44.0168 GiB`, so the strict gate selected the documented first fallback. Half-resolution latent decode (`latent_scale=0.5`) peaked at `37.4741 GiB`; `decode_freq=3`, LoRA rank 16, and full transformer checkpointing remain unchanged. Generation and evaluation still run at native 768x1024.
+
+4. Run the required 20-step full-branch smoke. Step 1 forces `tau=0.5`, so all three transformer forwards, one VAE decode, RetinaFace geometry, F_train, both directed losses, and joint backward execute.
+
+```bash
+CUDA_VISIBLE_DEVICES=0 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+/home/muxiangyu/miniconda3/envs/refton_m2h/bin/python train_paired.py \
+  --config configs/a4_directed.yaml --dev-single-gpu --smoke-steps 20 \
+  --override-output-id phase2_a4_smoke_20
+```
+
+5. Run the unique A4 continuation and frozen evaluation. GPU0-2 train; GPU3 watches checkpoints. The script refuses to launch a second training run once `checkpoints/final/READY` exists.
+
+```bash
+bash scripts/run_a4_gate.sh
+```
+
+Outputs:
+
+```text
+phase1/phase2_a4_directed_r16_4000_768x1024/
+eval/a4_gen/
+eval/a4_metrics/
+eval/a4_report.md
+eval/a4_gate_report.md
+eval/a4_gate_report.json
+```
+
+The final identity gate requires held-out `sim_target` gain at least 0.03 with greater-side Wilcoxon `p<0.05`; GarmentSim, pose cross-identity variance, face detection, and detector-confidence realism proxy must not regress. The report emits the fixed PASS, FAIL, or MIXED conclusion and does not authorize another training round.
 
 ## Grep Disposition
 

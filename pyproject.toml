@@ -22,6 +22,8 @@ dependencies = [
   "lpips==0.1.4",
   "matplotlib",
   "numpy",
+  "onnx",
+  "onnx2torch==1.5.15",
   "opencv-python",
   "peft",
   "Pillow",
@@ -45,17 +47,21 @@ packages = ["metrics"]
 py-modules = [
   "build_cache",
   "build_identity_bank",
+  "build_identity_bank_v2",
   "build_region_masks_z",
   "conditions",
   "dataset",
   "eval_b2",
   "eval_b2_metrics",
   "eval_b2_make_vis",
+  "eval_a4_gate_report",
   "eval_gate_report",
   "eval_watcher",
   "pulid_flux",
   "speed_bench",
+  "diagnose_a2",
   "train_paired",
+  "train_recognizer",
 ]
 
 [tool.ruff]

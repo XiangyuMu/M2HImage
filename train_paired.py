@@ -6,6 +6,7 @@ import json
 import math
 import os
 import time
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -15,13 +16,20 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
+from torch.utils.checkpoint import checkpoint
 
 from conditions import (
     FluxConditionAdapter, assert_real_controlnet, atomic_torch_save, choose_dtype, get_resolution, load_yaml, make_image_ids,
-    make_text_ids, save_yaml, seed_everything, sha256_file, short_hash_path,
+    make_text_ids, save_yaml, seed_everything, sha256_file, short_hash_path, unpack_latents,
 )
 from dataset import PairedWarmupDataset, ResumeDistributedSampler
 from pulid_flux import PuLIDFluxAdapter
+from train_recognizer import (
+    RetinaFaceGeometryDetector,
+    TrainArcFaceRecognizer,
+    differentiable_face_align,
+    similarity_matrices,
+)
 
 
 class WarmupFlowModel(torch.nn.Module):
@@ -174,6 +182,8 @@ class WarmupFlowModel(torch.nn.Module):
         self,
         batch: dict[str, torch.Tensor],
         train_step: int | None = None,
+        decode_trigger: bool = False,
+        identity_loss_accum_scale: float = 1.0,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         flow = self._prepare_flow(batch)
         dtype, device = flow['dtype'], flow['device']
@@ -248,10 +258,28 @@ class DifferentialFlowModel(WarmupFlowModel):
         weights = active.to(dtype=values.dtype)
         return (values * weights).sum() / weights.sum().clamp_min(1.0)
 
+    def _identity_metric_defaults(self, device: torch.device) -> dict[str, torch.Tensor]:
+        return {}
+
+    def _extra_differential_loss(
+        self,
+        batch: dict[str, torch.Tensor],
+        flow: dict[str, torch.Tensor],
+        z_hat_j: torch.Tensor,
+        z_hat_k: torch.Tensor,
+        active: torch.Tensor,
+        train_step: int,
+        decode_trigger: bool,
+        identity_loss_accum_scale: float,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        return torch.zeros((), device=flow['device'], dtype=torch.float32), {}
+
     def forward(
         self,
         batch: dict[str, torch.Tensor],
         train_step: int | None = None,
+        decode_trigger: bool = False,
+        identity_loss_accum_scale: float = 1.0,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         train_step = int(train_step or 0)
         flow = self._prepare_flow(batch)
@@ -300,6 +328,8 @@ class DifferentialFlowModel(WarmupFlowModel):
         face_diff_mean = zero
         hinge_active_rate = zero
         calibration_ratios = torch.empty((0,), device=device, dtype=torch.float32)
+        extra_loss = zero
+        extra_metrics = self._identity_metric_defaults(device)
         transformer_count = 1.0
         if bool(active.any()):
             tokens_j = self._condition_tokens(
@@ -356,6 +386,17 @@ class DifferentialFlowModel(WarmupFlowModel):
                 hinge_per = F.relu(margin - face_per)
                 loss_hinge = self._active_mean(hinge_per, active)
                 hinge_active_rate = self._active_mean((hinge_per > 0).float(), active)
+            extra_loss, computed_extra_metrics = self._extra_differential_loss(
+                batch,
+                flow,
+                z_hat_j,
+                z_hat_k,
+                active,
+                train_step,
+                decode_trigger,
+                identity_loss_accum_scale,
+            )
+            extra_metrics.update(computed_extra_metrics)
 
         calibrating = self.hinge_g is None
         lambda_teach = float(self.diff_cfg.get('lambda_teach', 0.5))
@@ -366,6 +407,7 @@ class DifferentialFlowModel(WarmupFlowModel):
             + lambda_teach * loss_teach
             + lambda_inv * loss_inv
             + lambda_hinge * loss_hinge
+            + extra_loss
         )
         metrics.update({
             'loss_total': total.detach(),
@@ -381,7 +423,193 @@ class DifferentialFlowModel(WarmupFlowModel):
             'transformer_forward_count': torch.tensor(transformer_count, device=device),
             'calibration_ratios': calibration_ratios,
         })
+        metrics.update(extra_metrics)
         return total, metrics
+
+
+class DirectedDifferentialFlowModel(DifferentialFlowModel):
+    """A4 adds a differentiable identity objective without changing A2 losses.
+
+    Held-out AdaFace is evaluation-only and must never be imported here. Identity
+    references, semi-hard distances, and this loss all use frozen Glint360K ArcFace.
+    """
+
+    def __init__(
+        self,
+        transformer,
+        controlnet,
+        adapter: FluxConditionAdapter,
+        pulid: PuLIDFluxAdapter,
+        vae: torch.nn.Module,
+        train_recognizer: TrainArcFaceRecognizer,
+        face_detector: RetinaFaceGeometryDetector,
+        cfg: dict[str, Any],
+    ) -> None:
+        super().__init__(transformer, controlnet, adapter, pulid, cfg)
+        if vae is None:
+            raise RuntimeError('A4 directed identity loss requires model.load_vae_in_train=true')
+        self.vae = vae
+        self.train_recognizer = train_recognizer
+        self.face_detector = face_detector
+        self.decode_cfg = self.diff_cfg['decode']
+        self.identity_cfg = self.diff_cfg['identity_loss']
+        if not self.decode_cfg.get('enabled', False) or not self.identity_cfg.get('enabled', False):
+            raise RuntimeError('DirectedDifferentialFlowModel requires decode.enabled and identity_loss.enabled')
+        self.vae.requires_grad_(False).eval()
+        self.train_recognizer.requires_grad_(False).eval()
+
+    def _identity_metric_defaults(self, device: torch.device) -> dict[str, torch.Tensor]:
+        zero = torch.zeros((), device=device, dtype=torch.float32)
+        return {
+            'loss_id_dir': zero,
+            'loss_id_abs': zero,
+            'sim_gap': zero,
+            'id_loss_attempt_count': zero,
+            'id_loss_skip_count': zero,
+            'id_loss_triggered': zero,
+            'id_decode_seconds': zero,
+            'id_decode_branch': zero,
+        }
+
+    def _decode_tokens(self, tokens: torch.Tensor) -> torch.Tensor:
+        latents = unpack_latents(tokens, self.width, self.height)
+        latent_scale = float(self.decode_cfg.get('latent_scale', 1.0))
+        if not 0.0 < latent_scale <= 1.0:
+            raise RuntimeError(f'decode latent_scale must be in (0,1], got {latent_scale}')
+        if latent_scale < 1.0:
+            target_h = max(1, int(round(latents.shape[-2] * latent_scale)))
+            target_w = max(1, int(round(latents.shape[-1] * latent_scale)))
+            latents = F.interpolate(latents, size=(target_h, target_w), mode='bilinear', align_corners=False)
+        vae_dtype = next(self.vae.parameters()).dtype
+        latents = latents.to(dtype=vae_dtype)
+        latents = (latents / self.vae.config.scaling_factor) + self.vae.config.shift_factor
+
+        def decode_fn(value: torch.Tensor) -> torch.Tensor:
+            return self.vae.decode(value, return_dict=False)[0]
+
+        if bool(self.decode_cfg.get('gradient_checkpointing', True)):
+            return checkpoint(decode_fn, latents, use_reentrant=False)
+        return decode_fn(latents)
+
+    def _decode_identity_branch(
+        self,
+        tokens: torch.Tensor,
+        positive_refs: torch.Tensor,
+        negative_refs: torch.Tensor,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        device = tokens.device
+        if device.type == 'cuda':
+            torch.cuda.synchronize(device)
+        started = time.perf_counter()
+        decoded = self._decode_tokens(tokens)
+        geometries = self.face_detector.detect_tensor_batch(decoded)
+        min_conf = float(self.identity_cfg.get('min_detection_confidence', 0.5))
+        valid_indices = [
+            index
+            for index, geometry in enumerate(geometries)
+            if geometry is not None and geometry.confidence >= min_conf
+        ]
+        attempt_count = len(geometries)
+        skip_count = attempt_count - len(valid_indices)
+        zero = decoded.sum() * 0.0
+        if not valid_indices:
+            if device.type == 'cuda':
+                torch.cuda.synchronize(device)
+            return zero, {
+                'loss_id_dir': zero.detach().float(),
+                'loss_id_abs': zero.detach().float(),
+                'sim_gap': zero.detach().float(),
+                'id_loss_attempt_count': torch.tensor(float(attempt_count), device=device),
+                'id_loss_skip_count': torch.tensor(float(skip_count), device=device),
+                'id_decode_seconds': torch.tensor(time.perf_counter() - started, device=device),
+            }
+        valid = torch.as_tensor(valid_indices, device=device, dtype=torch.long)
+        matrices = similarity_matrices([geometries[index] for index in valid_indices])
+        aligned = differentiable_face_align(
+            decoded.index_select(0, valid).clamp(-1.0, 1.0),
+            matrices,
+            image_size=int(self.train_recognizer.input_size),
+        )
+        generated = self.train_recognizer(aligned)
+        positive = F.normalize(positive_refs.index_select(0, valid).to(device=device, dtype=torch.float32), dim=1)
+        negative = F.normalize(negative_refs.index_select(0, valid).to(device=device, dtype=torch.float32), dim=1)
+        sim_positive = (generated * positive).sum(dim=1)
+        sim_negative = (generated * negative).sum(dim=1)
+        sim_gap = sim_positive - sim_negative
+        margin = float(self.identity_cfg.get('margin', 0.1))
+        loss_dir = F.softplus(sim_negative - sim_positive + margin).mean()
+        loss_abs = (1.0 - sim_positive).mean()
+        weighted = (
+            float(self.identity_cfg.get('lambda_dir', 0.1)) * loss_dir
+            + float(self.identity_cfg.get('lambda_abs', 0.05)) * loss_abs
+        )
+        if device.type == 'cuda':
+            torch.cuda.synchronize(device)
+        return weighted, {
+            'loss_id_dir': loss_dir.detach(),
+            'loss_id_abs': loss_abs.detach(),
+            'sim_gap': sim_gap.detach().mean(),
+            'id_loss_attempt_count': torch.tensor(float(attempt_count), device=device),
+            'id_loss_skip_count': torch.tensor(float(skip_count), device=device),
+            'id_decode_seconds': torch.tensor(time.perf_counter() - started, device=device),
+        }
+
+    def _extra_differential_loss(
+        self,
+        batch: dict[str, torch.Tensor],
+        flow: dict[str, torch.Tensor],
+        z_hat_j: torch.Tensor,
+        z_hat_k: torch.Tensor,
+        active: torch.Tensor,
+        train_step: int,
+        decode_trigger: bool,
+        identity_loss_accum_scale: float,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        device = flow['device']
+        defaults = self._identity_metric_defaults(device)
+        if not decode_trigger:
+            return torch.zeros((), device=device, dtype=torch.float32), defaults
+        tau_min = float(self.decode_cfg.get('tau_min', 0.35))
+        tau_max = float(self.decode_cfg.get('tau_max', 0.7))
+        decode_active = active & (flow['tau'].float() >= tau_min) & (flow['tau'].float() <= tau_max)
+        indices = torch.nonzero(decode_active, as_tuple=False).flatten()
+        if not len(indices):
+            return torch.zeros((), device=device, dtype=torch.float32), defaults
+        refs_j = batch['cf_j_train_embed'].to(device=device, dtype=torch.float32)
+        refs_k = batch['cf_k_train_embed'].to(device=device, dtype=torch.float32)
+        decode_both = bool(self.decode_cfg.get('both', False))
+        freq = max(1, int(self.decode_cfg.get('freq', 3)))
+        branches = (0, 1) if decode_both else ((train_step // freq) % 2,)
+        losses = []
+        rows = []
+        for branch in branches:
+            if branch == 0:
+                tokens, positive, negative = z_hat_j, refs_j, refs_k
+            else:
+                tokens, positive, negative = z_hat_k, refs_k, refs_j
+            loss, row = self._decode_identity_branch(
+                tokens.index_select(0, indices),
+                positive.index_select(0, indices),
+                negative.index_select(0, indices),
+            )
+            losses.append(loss)
+            rows.append(row)
+        combined = torch.stack(losses).mean() * float(identity_loss_accum_scale)
+        metrics = {
+            key: torch.stack([row[key].float() for row in rows]).mean()
+            for key in ('loss_id_dir', 'loss_id_abs', 'sim_gap', 'id_decode_seconds')
+        }
+        metrics['id_loss_attempt_count'] = torch.stack(
+            [row['id_loss_attempt_count'].float() for row in rows]
+        ).sum()
+        metrics['id_loss_skip_count'] = torch.stack(
+            [row['id_loss_skip_count'].float() for row in rows]
+        ).sum()
+        metrics['id_loss_triggered'] = torch.ones((), device=device, dtype=torch.float32)
+        metrics['id_decode_branch'] = torch.tensor(
+            0.5 if decode_both else float(branches[0]), device=device, dtype=torch.float32
+        )
+        return combined, metrics
 
 
 def setup_dist() -> tuple[int, int, int]:
@@ -453,6 +681,28 @@ def load_components(cfg: dict[str, Any], device: torch.device, dtype: torch.dtyp
         'pulid_ca_self_check_l2': pulid_delta_l2,
         'pulid_transformer_self_check_l2': pulid_transformer_l2,
         'pulid_context_switch_self_check_l2': pulid_context_switch_l2,
+        'vae_in_train': bool(vae is not None),
+    }
+
+
+def load_directed_identity_components(
+    cfg: dict[str, Any],
+    device: torch.device,
+) -> tuple[TrainArcFaceRecognizer, RetinaFaceGeometryDetector, dict[str, Any]]:
+    recognizer_cfg = cfg.get('model', {}).get('train_recognizer')
+    if not isinstance(recognizer_cfg, dict):
+        raise RuntimeError('A4 requires model.train_recognizer with a real Glint360K ArcFace checkpoint')
+    recognizer = TrainArcFaceRecognizer(recognizer_cfg, device)
+    detector_device = int(recognizer_cfg.get('detector_device_id', -1))
+    detector = RetinaFaceGeometryDetector(recognizer_cfg, device_id=detector_device)
+    return recognizer, detector, {
+        'train_recognizer': recognizer.launch_note(),
+        'face_detector': {
+            'name': recognizer_cfg.get('detector_name', 'antelopev2'),
+            'model_root': recognizer_cfg.get('detector_model_root'),
+            'device_id': detector_device,
+            'role': 'no-grad geometry only',
+        },
     }
 
 
@@ -609,6 +859,61 @@ def averaged_metrics(totals: dict[str, float], counts: dict[str, int]) -> dict[s
     return {name: totals[name] / max(1, counts[name]) for name in totals}
 
 
+def summarize_sampling_window(
+    local_distances: list[float],
+    local_relaxations: list[int],
+) -> dict[str, Any]:
+    if dist.is_initialized():
+        gathered: list[dict[str, list[float] | list[int]] | None] = [None] * dist.get_world_size()
+        dist.all_gather_object(gathered, {
+            'distances': local_distances,
+            'relaxations': local_relaxations,
+        })
+        distances = [float(value) for row in gathered if row for value in row['distances']]
+        relaxations = [int(value) for row in gathered if row for value in row['relaxations']]
+    else:
+        distances = [float(value) for value in local_distances]
+        relaxations = [int(value) for value in local_relaxations]
+    if not distances:
+        return {'count': 0}
+    array = np.asarray(distances, dtype=np.float64)
+    counts = Counter(relaxations)
+    return {
+        'count': int(len(array)),
+        'd_jk_mean': float(np.mean(array)),
+        'd_jk_p25': float(np.quantile(array, 0.25)),
+        'd_jk_p75': float(np.quantile(array, 0.75)),
+        'relax_strict': int(counts.get(0, 0)),
+        'relax_age': int(counts.get(1, 0)),
+        'relax_skin': int(counts.get(2, 0)),
+        'distances': [float(value) for value in distances],
+    }
+
+
+def reduce_identity_metric_sums(
+    totals: dict[str, float],
+    device: torch.device,
+) -> dict[str, float]:
+    names = (
+        'loss_id_dir',
+        'loss_id_abs',
+        'sim_gap',
+        'id_decode_seconds',
+        'id_decode_branch',
+        'id_loss_attempt_count',
+        'id_loss_skip_count',
+        'id_loss_triggered',
+    )
+    values = torch.tensor(
+        [float(totals.get(name, 0.0)) for name in names],
+        device=device,
+        dtype=torch.float64,
+    )
+    if dist.is_initialized():
+        dist.all_reduce(values, op=dist.ReduceOp.SUM)
+    return {name: float(value) for name, value in zip(names, values.cpu().tolist(), strict=True)}
+
+
 def calibrate_hinge_g(local_ratios: list[float], device: torch.device) -> tuple[float, int]:
     gathered: list[list[float] | None]
     if dist.is_initialized():
@@ -732,9 +1037,30 @@ def train(args: argparse.Namespace) -> None:
             print(f'[rank0] allow_partial_cache: using {len(dataset.ids)} cached train samples for smoke only', flush=True)
     sampler = ResumeDistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True, seed=int(cfg['experiment']['seed']))
     transformer, controlnet, vae, adapter, pulid, load_notes = load_components(cfg, device, dtype)
-    differential_enabled = bool(cfg.get('training', {}).get('differential', {}).get('enabled', False))
-    model_cls = DifferentialFlowModel if differential_enabled else WarmupFlowModel
-    model = model_cls(transformer, controlnet, adapter, pulid, cfg)
+    differential_cfg = cfg.get('training', {}).get('differential', {})
+    differential_enabled = bool(differential_cfg.get('enabled', False))
+    directed_enabled = bool(
+        differential_enabled
+        and differential_cfg.get('decode', {}).get('enabled', False)
+        and differential_cfg.get('identity_loss', {}).get('enabled', False)
+    )
+    if directed_enabled:
+        train_recognizer, face_detector, identity_notes = load_directed_identity_components(cfg, device)
+        load_notes.update(identity_notes)
+        model = DirectedDifferentialFlowModel(
+            transformer,
+            controlnet,
+            adapter,
+            pulid,
+            vae,
+            train_recognizer,
+            face_detector,
+            cfg,
+        )
+    elif differential_enabled:
+        model = DifferentialFlowModel(transformer, controlnet, adapter, pulid, cfg)
+    else:
+        model = WarmupFlowModel(transformer, controlnet, adapter, pulid, cfg)
     if not args.smoke_steps:
         maybe_probe_micro_batch(model, dataset, cfg, world_size, rank, device)
     loader = make_loader(dataset, sampler, cfg)
@@ -776,6 +1102,7 @@ def train(args: argparse.Namespace) -> None:
         'target_step': target_step,
         'continuation_steps': target_step - run_origin_step,
         'differential_enabled': differential_enabled,
+        'directed_identity_enabled': directed_enabled,
     })
     resume_path = Path(cfg['training']['resume']) if cfg['training'].get('resume') else None
     resume_hash = (
@@ -786,6 +1113,11 @@ def train(args: argparse.Namespace) -> None:
     train_ids_hash = hashlib.sha256(
         ('\n'.join(dataset.ids) + '\n').encode('utf-8')
     ).hexdigest()[:16]
+    identity_bank_path = (
+        Path(cfg['data']['root']) / cfg['data']['identity_bank']
+        if differential_enabled and cfg['data'].get('identity_bank')
+        else None
+    )
     if rank == 0:
         output.mkdir(parents=True, exist_ok=True)
         save_yaml(output / 'resolved_config.yaml', cfg)
@@ -801,7 +1133,13 @@ def train(args: argparse.Namespace) -> None:
             'excluded_train_ids': dataset.excluded_ids,
             'run_origin_step': run_origin_step,
             'target_step': target_step,
-            'fairness_note': 'A2 and B2-cont must use the same resume checkpoint/hash, seed, sampler state, global batch, LR, and continuation step count.',
+            'differential_sampling': differential_cfg.get('sampling', 'random'),
+            'identity_bank': {
+                'path': str(identity_bank_path) if identity_bank_path else None,
+                'hash': sha256_file(identity_bank_path)[:16] if identity_bank_path and identity_bank_path.exists() else None,
+                'semihard_pool': differential_cfg.get('semihard_pool'),
+            },
+            'fairness_note': 'A4, A2, and B2-cont must use the same resume checkpoint/hash, seed, sampler state, train IDs, global batch, LR, rank, and continuation step count.',
         }, indent=2, ensure_ascii=False), encoding='utf-8')
         print(f'[rank0] runtime={cfg["_runtime"]}', flush=True)
         print(f'[rank0] controlnet={load_notes["controlnet"]}', flush=True)
@@ -834,6 +1172,10 @@ def train(args: argparse.Namespace) -> None:
     calibration_steps = int(
         cfg.get('training', {}).get('differential', {}).get('calibration_steps', 0)
     )
+    sampling_log_every = max(1, int(differential_cfg.get('sampling_log_every', 100)))
+    sampling_distances: list[float] = []
+    sampling_relaxations: list[int] = []
+    sampling_stats_for_log: dict[str, Any] | None = None
     while global_step < target_step and not stopped_by_watcher:
         sampler.set_epoch(global_step // max(1, len(loader)))
         for batch_idx, batch in enumerate(loader):
@@ -841,12 +1183,42 @@ def train(args: argparse.Namespace) -> None:
                 torch.cuda.reset_peak_memory_stats(device)
                 benchmark_start = time.perf_counter()
             run_step = global_step - run_origin_step
-            if args.smoke_steps > 0 and differential_enabled and run_step == 0:
+            smoke_decode_steps = {
+                0,
+                max(1, int(differential_cfg.get('decode', {}).get('freq', 3))),
+            }
+            if args.smoke_steps > 0 and differential_enabled and (
+                run_step == 0 or directed_enabled and run_step in smoke_decode_steps
+            ):
                 batch = dict(batch)
                 batch_size = int(batch['target_latents'].shape[0])
                 batch['tau_override'] = torch.full((batch_size,), 0.5, dtype=torch.float32)
-            loss, metrics = ddp(batch, train_step=run_step)
+            decode_cfg = differential_cfg.get('decode', {})
+            decode_freq = max(1, int(decode_cfg.get('freq', 3)))
+            decode_trigger = bool(
+                directed_enabled
+                and run_step % decode_freq == 0
+                and micro_step % accum == accum - 1
+            )
+            identity_loss_accum_scale = (
+                float(accum)
+                if directed_enabled
+                and differential_cfg.get('identity_loss', {}).get('compensate_grad_accum', True)
+                else 1.0
+            )
+            loss, metrics = ddp(
+                batch,
+                train_step=run_step,
+                decode_trigger=decode_trigger,
+                identity_loss_accum_scale=identity_loss_accum_scale,
+            )
             accumulate_scalar_metrics(metric_totals, metric_counts, metrics)
+            if differential_enabled and 'delta_arc_jk' in batch:
+                sampling_distances.extend(batch['delta_arc_jk'].detach().float().cpu().reshape(-1).tolist())
+                sampling_relaxations.extend(
+                    batch.get('cf_sampling_relaxation', torch.zeros_like(batch['delta_arc_jk']))
+                    .detach().long().cpu().reshape(-1).tolist()
+                )
             ratios = metrics.get('calibration_ratios')
             if isinstance(ratios, torch.Tensor) and ratios.numel():
                 calibration_ratios.extend(ratios.detach().float().cpu().tolist())
@@ -881,12 +1253,45 @@ def train(args: argparse.Namespace) -> None:
                         f'[rank0] hinge calibration complete: g={hinge_g:.6f}, samples={calibration_count}',
                         flush=True,
                     )
+            identity_sums = (
+                reduce_identity_metric_sums(metric_totals, device)
+                if directed_enabled
+                else {
+                    'loss_id_dir': 0.0,
+                    'loss_id_abs': 0.0,
+                    'sim_gap': 0.0,
+                    'id_decode_seconds': 0.0,
+                    'id_decode_branch': 0.0,
+                    'id_loss_attempt_count': 0.0,
+                    'id_loss_skip_count': 0.0,
+                    'id_loss_triggered': 0.0,
+                }
+            )
+            id_attempt_sum = identity_sums['id_loss_attempt_count']
+            id_skip_sum = identity_sums['id_loss_skip_count']
+            id_trigger_sum = identity_sums['id_loss_triggered']
             step_metrics = averaged_metrics(metric_totals, metric_counts)
+            if id_trigger_sum > 0.0:
+                for name in ('loss_id_dir', 'loss_id_abs', 'sim_gap', 'id_decode_seconds', 'id_decode_branch'):
+                    step_metrics[name] = identity_sums[name] / id_trigger_sum
+                step_metrics['id_loss_triggered'] = id_trigger_sum
+                step_metrics['id_loss_attempt_count'] = id_attempt_sum
+                step_metrics['id_loss_skip_count'] = id_skip_sum
+            if id_attempt_sum > 0.0:
+                step_metrics['id_loss_skip_rate'] = id_skip_sum / id_attempt_sum
             metric_totals.clear()
             metric_counts.clear()
+            if differential_enabled and completed_run_steps % sampling_log_every == 0:
+                sampling_stats_for_log = summarize_sampling_window(
+                    sampling_distances,
+                    sampling_relaxations,
+                )
+                sampling_distances.clear()
+                sampling_relaxations.clear()
             if rank == 0 and (
                 global_step % int(cfg['training']['log_every']) == 0
                 or completed_run_steps <= 3
+                or id_trigger_sum > 0.0
             ):
                 log_dir.mkdir(parents=True, exist_ok=True)
                 row = {
@@ -895,6 +1300,8 @@ def train(args: argparse.Namespace) -> None:
                     'lr': cfg['_runtime']['effective_lr'],
                     'peak_gib': torch.cuda.max_memory_allocated(device) / 1024**3,
                     'sample_ids': list(batch.get('sample_id', [])),
+                    'cf_j_ids': list(batch.get('cf_j_id', [])),
+                    'cf_k_ids': list(batch.get('cf_k_id', [])),
                 }
                 for name in (
                     'loss_total', 'loss_pair', 'loss_teach', 'loss_inv', 'loss_hinge',
@@ -902,12 +1309,20 @@ def train(args: argparse.Namespace) -> None:
                     'hinge_calibrating', 'hinge_g', 'head_pose_null_ratio',
                     'tau_mean', 'z1_mean', 'controlnet_forward_count',
                     'transformer_forward_count', 'appearance_gate', 'garment_gate',
-                    'head_pose_gate',
+                    'head_pose_gate', 'loss_id_dir', 'loss_id_abs', 'sim_gap',
+                    'id_loss_attempt_count', 'id_loss_skip_count', 'id_loss_skip_rate',
+                    'id_loss_triggered', 'id_decode_seconds', 'id_decode_branch',
                 ):
                     if name in step_metrics:
                         row[name] = step_metrics[name]
                 if isinstance(core_model, DifferentialFlowModel) and core_model.hinge_g is not None:
                     row['hinge_g'] = float(core_model.hinge_g)
+                if sampling_stats_for_log is not None:
+                    sampling_row = {'step': global_step, 'run_step': completed_run_steps, **sampling_stats_for_log}
+                    with (log_dir / 'sampling_d_jk.jsonl').open('a', encoding='utf-8') as handle:
+                        handle.write(json.dumps(sampling_row, ensure_ascii=False) + '\n')
+                    row.update({key: value for key, value in sampling_stats_for_log.items() if key != 'distances'})
+                    sampling_stats_for_log = None
                 with (log_dir / 'train.jsonl').open('a', encoding='utf-8') as handle:
                     handle.write(json.dumps(row, ensure_ascii=False) + '\n')
                 print(f'[rank0] {row}', flush=True)

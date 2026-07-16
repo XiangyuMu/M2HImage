@@ -19,6 +19,7 @@ DIFFERENTIAL_MASK_KEYS = ('cloth_safe_z', 'body_bg_z', 'face_z')
 
 class IdentityBank:
     REQUIRED_KEYS = ('ids', 'embeds', 'gender', 'age', 'age_group', 'skin_cluster')
+    RELAXATION_NAMES = ('strict', 'relax_age', 'relax_skin')
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
@@ -53,56 +54,155 @@ class IdentityBank:
                 indices = np.flatnonzero((self.gender == gender) & (self.skin_cluster == skin))
                 if len(indices):
                     self._buckets[(gender, skin)] = indices
-        self._compatible_cache: dict[tuple[str, int, float], np.ndarray] = {}
+        self._compatible_cache: dict[tuple[str, int, float, int], np.ndarray] = {}
 
-    def compatible_indices(self, source_index: int) -> np.ndarray:
+    def _candidate_base(self, source_index: int, relaxation: int = 0) -> np.ndarray:
+        if relaxation not in (0, 1, 2):
+            raise ValueError(f'unknown identity compatibility relaxation={relaxation}')
         gender = str(self.gender[source_index])
         skin = int(self.skin_cluster[source_index])
         age = float(self.age[source_index])
-        key = (gender, skin, age)
+        key = (gender, skin if relaxation < 2 else -1, age if relaxation == 0 else -1.0, relaxation)
         cached = self._compatible_cache.get(key)
         if cached is None:
-            groups = [
-                self._buckets[(gender, candidate_skin)]
-                for candidate_skin in range(skin - 1, skin + 2)
-                if (gender, candidate_skin) in self._buckets
-            ]
-            candidates = np.concatenate(groups) if groups else np.empty((0,), dtype=np.int64)
-            candidates = candidates[np.abs(self.age[candidates] - age) <= 15.0]
-            self._compatible_cache[key] = candidates
-            cached = candidates
+            if relaxation < 2:
+                groups = [
+                    self._buckets[(gender, candidate_skin)]
+                    for candidate_skin in range(skin - 1, skin + 2)
+                    if (gender, candidate_skin) in self._buckets
+                ]
+                candidates = np.concatenate(groups) if groups else np.empty((0,), dtype=np.int64)
+            else:
+                candidates = np.flatnonzero(self.gender == gender)
+            if relaxation == 0:
+                candidates = candidates[np.abs(self.age[candidates] - age) <= 15.0]
+            cached = candidates.astype(np.int64, copy=False)
+            self._compatible_cache[key] = cached
+        return cached
+
+    def candidate_indices(self, source_index: int, relaxation: int = 0) -> np.ndarray:
+        cached = self._candidate_base(source_index, relaxation)
         return cached[cached != source_index]
 
-    def sample_pair(self, sample_id: str, seed: int) -> tuple[int, int, float]:
-        if sample_id not in self.id_to_index:
-            raise RuntimeError(f'train sample {sample_id} is absent from A2 identity bank')
-        source_index = self.id_to_index[sample_id]
-        candidates = self.compatible_indices(source_index)
-        if len(candidates) < 2:
-            raise RuntimeError(
-                f'A2 compatible identity pool has fewer than two entries for {sample_id}: {len(candidates)}'
-            )
-        rng = np.random.default_rng(np.uint64(seed))
-        selected = rng.choice(candidates, size=2, replace=False)
-        j_index, k_index = int(selected[0]), int(selected[1])
-        cosine = float(np.dot(self.embeds[j_index], self.embeds[k_index]))
-        delta_arc = float(np.clip(1.0 - cosine, 0.0, 2.0))
-        return j_index, k_index, delta_arc
+    def compatible_indices(self, source_index: int) -> np.ndarray:
+        """A2-compatible strict pool retained for backward compatibility."""
+        return self.candidate_indices(source_index, relaxation=0)
 
-    def validate_sources(self, sample_ids: list[str]) -> dict[str, int]:
+    @staticmethod
+    def _farthest_pair(indices: np.ndarray, embeds: np.ndarray) -> tuple[int, int, float]:
+        if len(indices) < 2:
+            raise RuntimeError('semi-hard pool must contain at least two identities')
+        selected = np.sort(np.asarray(indices, dtype=np.int64))
+        features = embeds[selected]
+        distances = 1.0 - features @ features.T
+        distances[np.tril_indices(len(selected))] = -np.inf
+        flat = int(np.argmax(distances))
+        row, col = np.unravel_index(flat, distances.shape)
+        distance = float(np.clip(distances[row, col], 0.0, 2.0))
+        return int(selected[row]), int(selected[col]), distance
+
+    @staticmethod
+    def _sample_without_replacement(
+        rng: np.random.Generator,
+        candidates: np.ndarray,
+        count: int,
+        exclude_index: int | None = None,
+    ) -> np.ndarray:
+        available = len(candidates) - int(exclude_index is not None)
+        count = min(int(count), available)
+        if count == available:
+            if exclude_index is None:
+                return np.asarray(candidates, dtype=np.int64)
+            return candidates[candidates != exclude_index].astype(np.int64, copy=False)
+        positions: set[int] = set()
+        while len(positions) < count:
+            position = int(rng.integers(0, len(candidates)))
+            if exclude_index is not None and int(candidates[position]) == exclude_index:
+                continue
+            positions.add(position)
+        return np.asarray([candidates[position] for position in sorted(positions)], dtype=np.int64)
+
+    def sample_pair_details(
+        self,
+        sample_id: str,
+        seed: int,
+        sampling: str = 'random',
+        semihard_pool: int = 8,
+    ) -> dict[str, int | float | str]:
+        if sample_id not in self.id_to_index:
+            raise RuntimeError(f'train sample {sample_id} is absent from identity bank')
+        source_index = self.id_to_index[sample_id]
+        rng = np.random.default_rng(np.uint64(seed))
+        sampling = str(sampling).lower()
+        relaxation = 0
+        if sampling == 'random':
+            candidates = self.candidate_indices(source_index, relaxation=0)
+            candidate_count = len(candidates)
+            if candidate_count < 2:
+                raise RuntimeError(
+                    f'strict compatible identity pool has fewer than two entries for {sample_id}: {candidate_count}'
+                )
+            # Preserve the exact A2 random-policy RNG behavior for reproducibility.
+            selected = rng.choice(candidates, size=2, replace=False)
+            j_index, k_index = int(selected[0]), int(selected[1])
+            delta_arc = float(np.clip(1.0 - np.dot(self.embeds[j_index], self.embeds[k_index]), 0.0, 2.0))
+            pool_count = 2
+        elif sampling == 'semihard':
+            requested = max(2, int(semihard_pool))
+            candidates = self._candidate_base(source_index, relaxation=0)
+            candidate_count = len(candidates) - 1
+            while candidate_count < requested and relaxation < 2:
+                relaxation += 1
+                candidates = self._candidate_base(source_index, relaxation=relaxation)
+                candidate_count = len(candidates) - 1
+            if candidate_count < 2:
+                raise RuntimeError(
+                    f'same-gender identity pool has fewer than two entries for {sample_id}: {candidate_count}'
+                )
+            pool_count = min(requested, candidate_count)
+            pool = self._sample_without_replacement(
+                rng,
+                candidates,
+                pool_count,
+                exclude_index=source_index,
+            )
+            j_index, k_index, delta_arc = self._farthest_pair(pool, self.embeds)
+        else:
+            raise ValueError(f'unsupported differential sampling={sampling!r}; expected random or semihard')
+        return {
+            'j_index': j_index,
+            'k_index': k_index,
+            'delta_arc': delta_arc,
+            'relaxation': relaxation,
+            'relaxation_name': self.RELAXATION_NAMES[relaxation],
+            'candidate_count': int(candidate_count),
+            'pool_count': int(pool_count),
+        }
+
+    def sample_pair(self, sample_id: str, seed: int) -> tuple[int, int, float]:
+        details = self.sample_pair_details(sample_id, seed, sampling='random')
+        return int(details['j_index']), int(details['k_index']), float(details['delta_arc'])
+
+    def validate_sources(self, sample_ids: list[str], sampling: str = 'random') -> dict[str, int]:
         missing = [sample_id for sample_id in sample_ids if sample_id not in self.id_to_index]
         insufficient = []
         minimum = len(self.ids)
         for sample_id in sample_ids:
             if sample_id not in self.id_to_index:
                 continue
-            count = len(self.compatible_indices(self.id_to_index[sample_id]))
+            source_index = self.id_to_index[sample_id]
+            relaxation = 0 if sampling == 'random' else 2
+            count = (
+                len(self.candidate_indices(source_index, relaxation=0))
+                if sampling == 'random'
+                else len(self._candidate_base(source_index, relaxation=relaxation)) - 1
+            )
             minimum = min(minimum, count)
             if count < 2:
                 insufficient.append((sample_id, count))
         if missing or insufficient:
             raise RuntimeError(
-                'A2 identity bank cannot satisfy strict j!=k!=i compatible sampling; '
+                f'identity bank cannot satisfy j!=k!=i sampling={sampling}; '
                 f'missing={missing[:10]}, insufficient={insufficient[:10]}'
             )
         return {
@@ -135,12 +235,14 @@ class PairedWarmupDataset(Dataset):
         self.base_seed = int(config.get('experiment', {}).get('seed', 0))
         differential = config.get('training', {}).get('differential', {})
         self.differential_enabled = bool(differential.get('enabled', False)) and split == 'train'
+        self.differential_sampling = str(differential.get('sampling', 'random')).lower()
+        self.semihard_pool = int(differential.get('semihard_pool', 8))
         self.region_masks_z_dir = self.root / config['data'].get('region_masks_z_dir', 'derived/region_masks_z')
         self.identity_bank = None
         if self.differential_enabled:
             bank_path = self.root / config['data'].get('identity_bank', 'derived/identity_bank.npz')
             self.identity_bank = IdentityBank(bank_path)
-            self.identity_bank.validate_sources(self.ids)
+            self.identity_bank.validate_sources(self.ids, sampling=self.differential_sampling)
         if require_coverage:
             self.assert_coverage()
 
@@ -234,7 +336,15 @@ class PairedWarmupDataset(Dataset):
                 + epoch * 97_409
                 + index * 65_537
             ) & ((1 << 63) - 1)
-            j_index, k_index, delta_arc = self.identity_bank.sample_pair(sid, sample_seed)
+            pair = self.identity_bank.sample_pair_details(
+                sid,
+                sample_seed,
+                sampling=self.differential_sampling,
+                semihard_pool=self.semihard_pool,
+            )
+            j_index = int(pair['j_index'])
+            k_index = int(pair['k_index'])
+            delta_arc = float(pair['delta_arc'])
             j_id = str(self.identity_bank.ids[j_index])
             k_id = str(self.identity_bank.ids[k_index])
             with np.load(self.sample_path(j_id), mmap_mode='r') as j_row:
@@ -252,7 +362,12 @@ class PairedWarmupDataset(Dataset):
                 'cf_k_pulid_id_embed': torch.from_numpy(k_pulid).float(),
                 'cf_j_appearance': torch.from_numpy(j_appearance).float(),
                 'cf_k_appearance': torch.from_numpy(k_appearance).float(),
+                'cf_j_train_embed': torch.from_numpy(np.asarray(self.identity_bank.embeds[j_index])).float(),
+                'cf_k_train_embed': torch.from_numpy(np.asarray(self.identity_bank.embeds[k_index])).float(),
                 'delta_arc_jk': torch.tensor(delta_arc, dtype=torch.float32),
+                'cf_sampling_relaxation': torch.tensor(int(pair['relaxation']), dtype=torch.int64),
+                'cf_sampling_candidate_count': torch.tensor(int(pair['candidate_count']), dtype=torch.int64),
+                'cf_sampling_pool_count': torch.tensor(int(pair['pool_count']), dtype=torch.int64),
                 'cloth_safe_z': torch.from_numpy(mask_values['cloth_safe_z']).float(),
                 'body_bg_z': torch.from_numpy(mask_values['body_bg_z']).float(),
                 'face_z': torch.from_numpy(mask_values['face_z']).float(),

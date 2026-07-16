@@ -101,6 +101,16 @@ def write_report(
     out_dir: Path,
     report_path: Path,
 ) -> None:
+    differential = cfg.get('training', {}).get('differential', {})
+    is_a4 = bool(
+        differential.get('enabled', False)
+        and differential.get('identity_loss', {}).get('enabled', False)
+    )
+    report_title = (
+        '# A4 Directed Counterfactual Offline Metric Report'
+        if is_a4
+        else "# B2' PuLID Adapter-only Baseline Report"
+    )
     rows = expected_rows(cfg, subset, gen_dir)
     actual = sum(1 for row in rows if row['path'].exists())
     delta = load_summary(out_dir / 'deltaid_summary.json')
@@ -111,7 +121,7 @@ def write_report(
     sim_target_threshold = float(cfg.get('metrics', {}).get('heldout_id', {}).get('sim_target_acceptance', 0.3))
 
     lines: list[str] = [
-        "# B2' PuLID Adapter-only Baseline Report",
+        report_title,
         '',
         f"subset: {len(subset.get('mannequins', []))} mannequins / {len(subset.get('identity_pool', []))} identity pool / {len(subset.get('pairs', []))} pairs",
         f"garment type counts: {subset.get('garment_type_counts', {})}",
@@ -191,16 +201,27 @@ def write_report(
             f"Manual setup: {headpose.get('manual_setup', '')}",
         ])
 
-    lines.extend([
-        '',
-        '## B2 Readout',
-        '',
-        deltaid_conclusion(delta),
-        b2p_identity_acceptance(delta, sim_target_threshold),
-        garment_warning(garment, threshold),
-        garment_baseline_comparison(garment, previous_garment),
-        mae_line(headpose),
-    ])
+    if is_a4:
+        lines.extend([
+            '',
+            '## A4 Readout',
+            '',
+            'These frozen metrics are inputs to `eval_a4_gate_report.py`; A4 has no standalone verdict against B2-prime.',
+            deltaid_conclusion(delta),
+            garment_warning(garment, threshold),
+            mae_line(headpose),
+        ])
+    else:
+        lines.extend([
+            '',
+            '## B2 Readout',
+            '',
+            deltaid_conclusion(delta),
+            b2p_identity_acceptance(delta, sim_target_threshold),
+            garment_warning(garment, threshold),
+            garment_baseline_comparison(garment, previous_garment),
+            mae_line(headpose),
+        ])
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
     write_json(out_dir / 'b2_metric_bundle.json', {
@@ -261,4 +282,3 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
-

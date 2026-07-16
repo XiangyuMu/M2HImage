@@ -66,7 +66,13 @@ def generate(model: WarmupFlowModel, batch: dict, steps: int, seed: int, device,
     return z
 
 
-def make_panel(root: Path, sample_id: str, generated: Image.Image, resolution, swap: Image.Image | None = None, swap_id: str | None = None) -> Image.Image:
+def make_panel(
+    root: Path,
+    sample_id: str,
+    generated: Image.Image,
+    resolution,
+    identity_variants: list[tuple[str, Image.Image]] | None = None,
+) -> Image.Image:
     width, height = get_resolution(resolution)
     parts = [
         Image.open(find_one(root / 'images/mannequin', sample_id)).convert('RGB').resize((width, height)),
@@ -74,9 +80,9 @@ def make_panel(root: Path, sample_id: str, generated: Image.Image, resolution, s
         generated.resize((width, height)),
     ]
     labels = ['m_i', 'pose', 'generated c_i']
-    if swap is not None:
-        parts.append(swap.resize((width, height)))
-        labels.append(f'swap c_{swap_id}')
+    for label, variant in identity_variants or []:
+        parts.append(variant.resize((width, height)))
+        labels.append(label)
     parts.append(Image.open(find_one(root / 'images/human', sample_id)).convert('RGB').resize((width, height)))
     labels.append('h_i')
     canvas = Image.new('RGB', (width * len(parts), height + 24), (255, 255, 255))
@@ -194,6 +200,72 @@ def differential_collapse_risk(path: Path, cfg: dict) -> tuple[bool, dict]:
     return risk, details
 
 
+def directed_identity_history(path: Path, output_plot: Path) -> dict:
+    rows = []
+    if path.exists():
+        with path.open('r', encoding='utf-8') as handle:
+            for line in handle:
+                try:
+                    row = json.loads(line)
+                    attempts = float(row.get('id_loss_attempt_count', 0.0))
+                    triggered = float(row.get('id_loss_triggered', 0.0))
+                    sim_gap = float(row.get('sim_gap', 0.0))
+                    skips = float(row.get('id_loss_skip_count', 0.0))
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    continue
+                if triggered > 0.0 or attempts > 0.0:
+                    rows.append({
+                        'step': int(row.get('step', 0)),
+                        'sim_gap': sim_gap,
+                        'attempts': attempts,
+                        'skips': skips,
+                        'loss_id_dir': float(row.get('loss_id_dir', 0.0)),
+                        'loss_id_abs': float(row.get('loss_id_abs', 0.0)),
+                    })
+    attempts = sum(row['attempts'] for row in rows)
+    skips = sum(row['skips'] for row in rows)
+    summary = {
+        'status': 'insufficient' if not rows else 'ok',
+        'triggered_log_rows': len(rows),
+        'attempts': attempts,
+        'skips': skips,
+        'skip_rate': skips / attempts if attempts > 0.0 else None,
+        'sim_gap_latest': rows[-1]['sim_gap'] if rows else None,
+        'sim_gap_mean': float(np.mean([row['sim_gap'] for row in rows])) if rows else None,
+        'loss_id_dir_latest': rows[-1]['loss_id_dir'] if rows else None,
+        'loss_id_abs_latest': rows[-1]['loss_id_abs'] if rows else None,
+    }
+    if rows:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+
+        output_plot.parent.mkdir(parents=True, exist_ok=True)
+        steps = [row['step'] for row in rows]
+        gaps = [row['sim_gap'] for row in rows]
+        cumulative_skip = []
+        running_attempts = 0.0
+        running_skips = 0.0
+        for row in rows:
+            running_attempts += row['attempts']
+            running_skips += row['skips']
+            cumulative_skip.append(running_skips / max(running_attempts, 1.0))
+        figure, axes = plt.subplots(2, 1, figsize=(8, 6), sharex=True)
+        axes[0].plot(steps, gaps, linewidth=1.5)
+        axes[0].set_ylabel('sim_gap')
+        axes[0].grid(alpha=0.25)
+        axes[1].plot(steps, cumulative_skip, linewidth=1.5, color='tab:red')
+        axes[1].axhline(0.5, linestyle='--', linewidth=1.0, color='black')
+        axes[1].set_ylabel('cumulative skip rate')
+        axes[1].set_xlabel('optimizer step')
+        axes[1].grid(alpha=0.25)
+        figure.tight_layout()
+        figure.savefig(output_plot, dpi=150)
+        plt.close(figure)
+        summary['plot'] = str(output_plot)
+    return summary
+
+
 def run_once(config_path: str, ckpt: Path, device: str) -> bool:
     cfg = load_yaml(config_path)
     seed_everything(int(cfg['experiment']['seed']))
@@ -210,6 +282,11 @@ def run_once(config_path: str, ckpt: Path, device: str) -> bool:
     ds = PairedWarmupDataset(cfg, 'val', require_coverage=True)
     ids = ds.ids[: int(cfg['eval']['fixed_val_count'])]
     swap_count = min(int(cfg['eval'].get('identity_swap_count', 0)), len(ids))
+    differential_cfg = cfg.get('training', {}).get('differential', {})
+    directed_enabled = bool(
+        differential_cfg.get('enabled', False)
+        and differential_cfg.get('identity_loss', {}).get('enabled', False)
+    )
     experiment_dir = Path(cfg['data']['root']) / 'phase1' / cfg['experiment']['id']
     out = experiment_dir / 'warmup_vis' / ckpt.name
     out.mkdir(parents=True, exist_ok=True)
@@ -223,21 +300,40 @@ def run_once(config_path: str, ckpt: Path, device: str) -> bool:
         gen_path = out / f'{sid}_generated.png'
         image.save(gen_path)
         generated_paths.append(gen_path)
-        swap_image = None
-        swap_id = None
-        swap_path = None
+        variants: list[tuple[str, Image.Image]] = []
+        variant_paths: list[tuple[str, Path]] = []
         if i < swap_count:
-            swap_id = ids[(i + 1) % len(ids)]
-            donor = ds[ds.ids.index(swap_id)]
-            swap_batch = swap_identity(batch, donor)
-            swap_tokens = generate(model, swap_batch, int(cfg['eval']['generate_steps']), seed=2000 + i, device=torch_device, dtype=dtype)
-            swap_image = decode_tokens(vae, swap_tokens, cfg['data']['resolution'])
-            swap_path = out / f'{sid}_swap_{swap_id}.png'
-            swap_image.save(swap_path)
-            generated_paths.append(swap_path)
-        make_panel(root, sid, image, cfg['data']['resolution'], swap=swap_image, swap_id=swap_id).save(out / f'{sid}.png')
-        if swap_path is not None:
-            swap_rows.append({'sample_id': sid, 'swap_id': swap_id, 'paired_path': gen_path, 'swap_path': swap_path})
+            donor_offsets = (1, 2) if directed_enabled else (1,)
+            for variant_index, offset in enumerate(donor_offsets):
+                donor_id = ids[(i + offset) % len(ids)]
+                donor = ds[ds.ids.index(donor_id)]
+                swap_batch = swap_identity(batch, donor)
+                swap_tokens = generate(
+                    model,
+                    swap_batch,
+                    int(cfg['eval']['generate_steps']),
+                    seed=1000 + i,
+                    device=torch_device,
+                    dtype=dtype,
+                )
+                swap_image = decode_tokens(vae, swap_tokens, cfg['data']['resolution'])
+                role = ('j', 'k')[variant_index] if directed_enabled else 'swap'
+                swap_path = out / f'{sid}_{role}_{donor_id}.png'
+                swap_image.save(swap_path)
+                generated_paths.append(swap_path)
+                variants.append((f'generated c_{role}:{donor_id}', swap_image))
+                variant_paths.append((donor_id, swap_path))
+        make_panel(root, sid, image, cfg['data']['resolution'], identity_variants=variants).save(out / f'{sid}.png')
+        for donor_id, swap_path in variant_paths:
+            swap_rows.append({'sample_id': sid, 'swap_id': donor_id, 'paired_path': gen_path, 'swap_path': swap_path})
+        if directed_enabled and len(variant_paths) == 2:
+            swap_rows.append({
+                'sample_id': sid,
+                'swap_id': f'{variant_paths[0][0]} vs {variant_paths[1][0]}',
+                'paired_path': variant_paths[0][1],
+                'swap_path': variant_paths[1][1],
+                'comparison': 'j_vs_k',
+            })
 
     embeddings: dict[Path, np.ndarray | None] = {path: embedding_for_image(path, cfg, device_index) for path in generated_paths}
     detected = sum(emb is not None for emb in embeddings.values())
@@ -282,6 +378,18 @@ def run_once(config_path: str, ckpt: Path, device: str) -> bool:
             '⚠ COLLAPSE-RISK: face-region differential norm declined by more than 30% '
             'across sustained 500-step windows',
         )
+    directed_history = {'status': 'disabled'}
+    if directed_enabled:
+        directed_history = directed_identity_history(
+            experiment_dir / 'logs' / 'train.jsonl',
+            out / 'directed_identity_curves.png',
+        )
+        max_skip = float(differential_cfg.get('identity_loss', {}).get('max_skip_rate', 0.5))
+        if directed_history.get('skip_rate') is not None and directed_history['skip_rate'] > max_skip:
+            warnings.insert(
+                0,
+                f"⚠ A4 ID-LOSS: decode face-detection skip rate {directed_history['skip_rate']:.2%} exceeds {max_skip:.0%}",
+            )
     report = ['# Warmup Watcher Report', '']
     report.extend(warnings or ['status: automatic checks passed thresholds'])
     report.extend(['', f'checkpoint: `{ckpt}`', '', '## Automatic Checks', ''])
@@ -289,6 +397,9 @@ def run_once(config_path: str, ckpt: Path, device: str) -> bool:
     report.append(f'gate latest row: {gate_row if gate_row else "N/A"}')
     report.append(f'gate history movement: {gate_stats}')
     report.append(f'differential collapse monitor: {collapse_details}')
+    report.append(f'directed identity training: {directed_history}')
+    if directed_history.get('plot'):
+        report.append('directed identity curves: `directed_identity_curves.png`')
     report.append('')
     report.append('| sample | swap_id | ArcFace cos(generated c_i, swap c_j) | status |')
     report.append('|---|---|---:|---|')

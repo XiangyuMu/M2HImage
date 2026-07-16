@@ -1,0 +1,83 @@
+extends: a2_diff.yaml
+
+experiment:
+  id: phase2_a4_directed_r16_4000_768x1024
+  wandb_run_id: phase2_a4_directed_r16_4000_768x1024
+
+data:
+  # A4 uses one ArcFace space for semi-hard sampling, hinge calibration, and
+  # differentiable identity supervision. The held-out AdaFace remains eval-only.
+  identity_bank: derived/identity_bank_v2.npz
+  identity_bank_v2: derived/identity_bank_v2.npz
+  exclude_train_ids: ["47160"]
+
+model:
+  load_vae_in_train: true
+  train_recognizer:
+    type: arcface_torch_glint360k
+    architecture: iresnet100
+    backend: onnx2torch_glintr100
+    checkpoint: /data/muxiangyu/modelLibrary/insightface/models/antelopev2/glintr100.onnx
+    embedding_dim: 512
+    input_size: 112
+    detector_name: antelopev2
+    detector_model_root: /data/muxiangyu/modelLibrary/insightface
+    detector_checkpoint: /data/muxiangyu/modelLibrary/insightface/models/antelopev2/scrfd_10g_bnkps.onnx
+    det_size: 640
+    detector_threshold: 0.1
+    detector_face_crop_pad: 0.6
+    detector_min_face_crop_px: 320
+    detector_intra_op_threads: 8
+    detector_inter_op_threads: 1
+    bank_min_det_conf: 0.3
+    train_min_det_conf: 0.5
+
+training:
+  total_steps: 4000
+  additional_steps: 4000
+  resume: /data/muxiangyu/datasets/M2HImage/M2H_Final_v2/phase1/phase1_warmup_b2p_pulid_gatefix_resume_768x1024/checkpoints/final
+  differential:
+    enabled: true
+    sampling: semihard
+    semihard_pool: 8
+    sampling_log_every: 100
+    lambda_teach: 0.5
+    lambda_inv: 0.2
+    lambda_hinge: 0.05
+    tau_min: 0.2
+    tau_max: 0.8
+    diff_every: 1
+    calibration_steps: 200
+    hinge_g: null
+    hinge_g_resolved: null
+    smoke_hinge_g: 1.0
+    collapse_window_steps: 500
+    collapse_drop_fraction: 0.30
+    decode:
+      enabled: true
+      freq: 3
+      both: false
+      tau_min: 0.35
+      tau_max: 0.7
+      # Full-resolution decode measured 44.0168 GiB, just above the strict 44 GiB gate.
+      # Half-resolution latent decode measured 37.4741 GiB and is the preregistered fallback.
+      latent_scale: 0.5
+      gradient_checkpointing: true
+    identity_loss:
+      enabled: true
+      recognizer: train_arcface_glint360k
+      margin: 0.1
+      lambda_dir: 0.1
+      lambda_abs: 0.05
+      min_detection_confidence: 0.5
+      max_skip_rate: 0.5
+      # Only one accumulation micro-batch decodes on a selected optimizer step.
+      # Scale that term by grad_accum so lambda_dir/lambda_abs retain their stated meaning.
+      compensate_grad_accum: true
+
+eval:
+  b2_output_dir: eval/a4_gen
+  report_path: eval/a4_report.md
+
+metrics:
+  output_dir: eval/a4_metrics

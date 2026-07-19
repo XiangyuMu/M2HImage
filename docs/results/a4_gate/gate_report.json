@@ -1,0 +1,140 @@
+{
+  "verdict": "MIXED: 身份-服装 trade-off 成立，作为发现如实报告，训练侧不再重跑，λ 权衡留给论文讨论",
+  "fairness": {
+    "fields": {
+      "resume_trainable_hash": [
+        "c4638ff746e792e9",
+        "c4638ff746e792e9"
+      ],
+      "resume_sampler_state": [
+        {
+          "epoch": 0
+        },
+        {
+          "epoch": 0
+        }
+      ],
+      "train_ids_hash": [
+        "45c2b3d6ee738f81",
+        "45c2b3d6ee738f81"
+      ],
+      "train_sample_count": [
+        36033,
+        36033
+      ],
+      "excluded_train_ids": [
+        [
+          "47160"
+        ],
+        [
+          "47160"
+        ]
+      ],
+      "seed": [
+        20260706,
+        20260706
+      ],
+      "global_batch": [
+        18,
+        18
+      ],
+      "effective_lr": [
+        5.6250000000000005e-05,
+        5.6250000000000005e-05
+      ],
+      "continuation_steps": [
+        4000,
+        4000
+      ],
+      "lora_rank": [
+        16,
+        16
+      ],
+      "lr_schedule": [
+        "constant",
+        "constant"
+      ]
+    },
+    "mismatches": {}
+  },
+  "identity": {
+    "pass": true,
+    "sim_gain": 0.07209602240938694,
+    "sim_test": {
+      "count": 400,
+      "p_value": 9.293777942352554e-57,
+      "rank_biserial": 0.9135162094763092,
+      "mean_delta": 0.07209602240938694
+    },
+    "delta_test": {
+      "count": 400,
+      "p_value": 1.1247579064696108e-45,
+      "rank_biserial": 0.8156857855361596,
+      "mean_delta": 0.0705916410069949
+    }
+  },
+  "garment": {
+    "pass": false,
+    "a4_mean": 0.8778022212215832,
+    "b2_mean": 0.8950915493283954,
+    "test": {
+      "count": 50,
+      "p_value": 0.001024547362147743,
+      "rank_biserial": -0.49176470588235294,
+      "mean_delta": -0.01728932810681207
+    }
+  },
+  "pose": {
+    "pass": true,
+    "a4_mean": 88.7023298403974,
+    "b2_mean": 90.56371392173169,
+    "test": {
+      "count": 50,
+      "p_value": 0.8994826309858803,
+      "rank_biserial": 0.20784313725490197,
+      "mean_delta": -1.8613840813343043
+    }
+  },
+  "face": {
+    "pass": true,
+    "detection_pass": true,
+    "quality_pass": true,
+    "test": {
+      "count": 400,
+      "p_value": 0.9980799209942565,
+      "rank_biserial": 0.16680798004987532,
+      "mean_delta": 0.0025040915608406066
+    }
+  },
+  "treatment": {
+    "strengthened": true,
+    "random": {
+      "count": 72000,
+      "mean": 0.942039300782813,
+      "p25": 0.8932497948408127,
+      "p50": 0.9503185451030731,
+      "p75": 1.003618210554123
+    },
+    "semihard": {
+      "count": 72000,
+      "mean": 1.100046878678931,
+      "p25": 1.0736210346221924,
+      "p50": 1.0977147817611694,
+      "p75": 1.1237419843673706
+    },
+    "relaxation": {
+      "strict": 72000,
+      "relax_age": 0,
+      "relax_skin": 0
+    }
+  },
+  "training_identity": {
+    "triggered_log_rows": 956,
+    "attempts": 1387.0,
+    "skips": 27.0,
+    "skip_rate": 0.01946647440519106,
+    "sim_gap_first_quartile_mean": 0.07871480214356276,
+    "sim_gap_last_quartile_mean": 0.15987744788292438,
+    "sim_gap_latest": 0.03261987864971161
+  }
+}

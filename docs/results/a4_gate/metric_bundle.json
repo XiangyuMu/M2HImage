@@ -1,0 +1,121 @@
+{
+  "deltaid": {
+    "status": "ok",
+    "recognizer": "UniFace AdaFace IR-101 ONNX",
+    "repo": "/data/muxiangyu/modelLibrary/uniface",
+    "checkpoint": "/data/muxiangyu/modelLibrary/uniface/adaface_ir_101.onnx",
+    "checkpoint_hash": "f2eb07d03de0",
+    "detector": "InsightFace antelopev2 RetinaFace detection/alignment only; recognition is held-out AdaFace",
+    "count": 400,
+    "failed": 0,
+    "mean": 0.4794068728931052,
+    "median": 0.5027977041900158,
+    "sim_target_mean": 0.49439637593925,
+    "sim_source_mean": 0.014989503046144818,
+    "face_size_buckets": {
+      "80-120": {
+        "count": 84,
+        "mean": 0.42741063896010884,
+        "median": 0.4321273863315582
+      },
+      "<80": {
+        "count": 1,
+        "mean": 0.28271162509918213,
+        "median": 0.28271162509918213
+      },
+      ">120": {
+        "count": 315,
+        "mean": 0.49389696463331345,
+        "median": 0.5197558552026749
+      }
+    },
+    "garment_type": {
+      "dress": {
+        "count": 104,
+        "mean": 0.4923625001001011,
+        "median": 0.5032065007835627
+      },
+      "pants": {
+        "count": 104,
+        "mean": 0.4647252255370124,
+        "median": 0.49330103397369385
+      },
+      "skirt": {
+        "count": 96,
+        "mean": 0.4967962256824497,
+        "median": 0.5049675479531288
+      },
+      "top": {
+        "count": 96,
+        "mean": 0.4638873752652823,
+        "median": 0.5130971658509225
+      }
+    },
+    "csv": "/data/muxiangyu/datasets/M2HImage/M2H_Final_v2/eval/a4_metrics/deltaid_per_image.csv",
+    "histogram": "/data/muxiangyu/datasets/M2HImage/M2H_Final_v2/eval/a4_metrics/deltaid_hist.png"
+  },
+  "garment": {
+    "status": "ok",
+    "dino": "GSVTON vendored DINOv2 ViT-B/14",
+    "dino_repo_root": "/data/muxiangyu/pythonPrograms/GSVTON",
+    "dino_checkpoint": "/data/muxiangyu/pythonPrograms/GSVTON/pretrained/dinov2_vitb14_pretrain.pth",
+    "dino_checkpoint_hash": "0b8b82f85de9",
+    "mask_projection": "source mid derived/region_masks/{mid}.npz cloth_safe resized to configured generated frame; mask outside set to gray before DINO",
+    "dino_image_size": 518,
+    "mask_out_value": 0.5,
+    "generated_images": 400,
+    "feature_failures": 0,
+    "pair_count": 1400,
+    "cross_identity_group_mean_mean": 0.8778022212215832,
+    "cross_identity_group_mean_median": 0.8809248507022858,
+    "pairwise_mean": 0.8778022212215832,
+    "pairwise_median": 0.8883269131183624,
+    "source_similarity_mean": 0.7827504289150238,
+    "source_similarity_median": 0.7806683480739594,
+    "lpips_mean": 0.22068264306988566,
+    "lpips_median": 0.2264849692583084,
+    "ssim_mean": 0.7521543058584088,
+    "ssim_median": 0.7592787176926654,
+    "lpips_available": true,
+    "ssim_available": true,
+    "csv_pairwise": "/data/muxiangyu/datasets/M2HImage/M2H_Final_v2/eval/a4_metrics/garment_pairwise_dino.csv",
+    "csv_source": "/data/muxiangyu/datasets/M2HImage/M2H_Final_v2/eval/a4_metrics/garment_source_dino.csv",
+    "hist_pairwise": "/data/muxiangyu/datasets/M2HImage/M2H_Final_v2/eval/a4_metrics/garment_dino_pairwise_hist.png",
+    "hist_source": "/data/muxiangyu/datasets/M2HImage/M2H_Final_v2/eval/a4_metrics/garment_dino_source_hist.png"
+  },
+  "headpose": {
+    "status": "ok",
+    "runner": "uniface_headpose",
+    "checkpoint": "/data/muxiangyu/modelLibrary/uniface/headpose_resnet18.onnx",
+    "checkpoint_hash": "61c34e877989",
+    "angle_convention": "generated head pose from configured runner; target yaw/pitch/roll from derived/head_pose_6drepnet; errors folded into (-90, 90]",
+    "count": 400,
+    "failed": 0,
+    "yaw_mae_mean": 16.920389104718343,
+    "yaw_mae_median": 12.796279430389404,
+    "pitch_mae_mean": 8.735311708990485,
+    "pitch_mae_median": 7.844327509403229,
+    "roll_mae_mean": 11.366232549144188,
+    "roll_mae_median": 9.563769698143005,
+    "yaw_bucket_yaw_mae": {
+      "front": {
+        "count": 296,
+        "mean": 13.858510009654974,
+        "median": 11.078473448753357
+      },
+      "side": {
+        "count": 16,
+        "mean": 48.382502876222134,
+        "median": 50.90408581495285
+      },
+      "three-quarter": {
+        "count": 88,
+        "mean": 21.499052647839893,
+        "median": 19.968609750270844
+      }
+    },
+    "csv": "/data/muxiangyu/datasets/M2HImage/M2H_Final_v2/eval/a4_metrics/headpose_per_image.csv",
+    "histogram": "/data/muxiangyu/datasets/M2HImage/M2H_Final_v2/eval/a4_metrics/headpose_yaw_abs_err_hist.png"
+  },
+  "report": "/data/muxiangyu/datasets/M2HImage/M2H_Final_v2/eval/a4_report.md"
+}

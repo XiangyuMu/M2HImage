@@ -2,6 +2,76 @@
 
 This repository contains the FLUX.1-dev MA-RA-CDT paired warmup, B2' adapter-only baseline, A2 differential counterfactual experiment, and the preregistered one-shot A4 identity-directed gate.
 
+## Current Project Snapshot (2026-07-19)
+
+The project is intentionally paused after the completed A4 one-shot gate. No training or evaluation process is expected to be running. Code and compact result reports are on GitHub; datasets, caches, generated images, and checkpoints remain on the local data volume and are not tracked by Git.
+
+### Final Experiment Results
+
+All decision comparisons passed the fairness-field checks for start checkpoint, sampler state, train IDs, seed, global batch, learning rate, LoRA rank, schedule, and continuation length. B2' is a reference baseline; A2 and A4 are judged against the same equal-step B2-cont control.
+
+| run | held-out sim_target | DeltaID | GarmentSim | pose cross-ID variance | verdict |
+|---|---:|---:|---:|---:|---|
+| B2' adapter-only reference | 0.4196 | 0.4063 | 0.8622 | 89.3842 | identity baseline PASS |
+| B2-cont, paired-only +4000 steps | 0.4223 | 0.4088 | 0.8951 | 90.5637 | equal-step control |
+| A2 differential +4000 steps | 0.4388 | 0.4201 | 0.9016 | 89.0563 | FAIL on preregistered garment gate |
+| A4 directed identity +4000 steps | 0.4944 | 0.4794 | 0.8778 | 88.7023 | MIXED identity-garment trade-off |
+
+Frozen decisions:
+
+- B2' established that pretrained PuLID identity injection works: `sim_target=0.4196`, `DeltaID=0.4063`, 400/400 valid faces.
+- A2 improved GarmentSim over B2-cont by only `+0.0065` with one-sided Wilcoxon `p=0.066480`; bottom-quartile gain was `+0.0063`, below the preregistered `+0.02` threshold. The A2 garment-axis verdict is `FAIL`.
+- A2 diagnosis found the differential losses `BOUND`, resolved `hinge_g=0.0291450452`, and a significant held-out DeltaID gain of `+0.011327` (`p=2.6466e-6`). This justified the single A4 identity-axis run, but does not reverse the A2 garment verdict.
+- A4 increased held-out `sim_target` over B2-cont by `+0.072096` and DeltaID by `+0.070592`, both with greater-side Wilcoxon `p<1e-8`. Identity treatment passed strongly.
+- A4 GarmentSim regressed from `0.8951` to `0.8778`; the deterioration test gave `p=0.00102455`. Pose variance, face detection, and detector-confidence realism did not regress. The final preregistered verdict is `MIXED`.
+- Semi-hard sampling was measurably stronger: mean training-recognizer distance increased from `0.9420` for the replayed A2 random policy to `1.1000` for A4. A4 identity-loss face-detection skip rate was `1.95%`; training `sim_gap` rose from `0.0787` in the first quartile to `0.1599` in the last quartile.
+- Qualitatively, identity response and image clarity are healthy, but garment conditioning often remains generic or mismatched. The metric regression confirms this is a real trade-off, not only a visualization artifact.
+
+Per preregistration, **do not launch a third mechanism-rescue run from these experiments**. The defensible project conclusion is: identity-directed counterfactual training improves identity control, but the tested objective trades away garment stability. Any future training must be framed as a new, separately preregistered study rather than an A4 retry.
+
+### Result And Checkpoint Map
+
+Compact reports committed to Git:
+
+```text
+docs/results/a2_gate/diagnosis.md
+docs/results/a2_gate/diagnosis.json
+docs/results/a4_gate/gate_report.md
+docs/results/a4_gate/gate_report.json
+docs/results/a4_gate/metric_report.md
+docs/results/a4_gate/metric_bundle.json
+docs/results/a4_gate/treatment_strength.png
+```
+
+Large local artifacts under `/data/muxiangyu/datasets/M2HImage/M2H_Final_v2`:
+
+```text
+phase1/phase1_warmup_b2p_pulid_gatefix_resume_768x1024/   B2' run/checkpoints, 1.6G
+phase1/phase2_b2_cont_r16_4000_768x1024/                  B2-cont run/checkpoints, 1.7G
+phase1/phase2_a2_diff_r16_4000_768x1024/                  A2 run/checkpoints, 1.8G
+phase1/phase2_a4_directed_r16_4000_768x1024/              A4 run/checkpoints, 1.9G
+eval/b2p_gatefix_gen/                                     B2' 400 images, 252M
+eval/b2cont_gen/                                          B2-cont 400 images, 249M
+eval/a2_gen/                                              A2 400 images, 242M
+eval/a4_gen/                                              A4 400 images, 259M
+eval/b2p_gatefix_metrics/                                 frozen B2' metrics
+eval/b2cont_metrics/                                      frozen B2-cont metrics
+eval/a2_metrics/                                          frozen A2 metrics
+eval/a4_metrics/                                          frozen A4 metrics
+eval/cf_subset.json                                       shared immutable evaluation subset
+```
+
+The final trainable checkpoint for each run is under its `checkpoints/final/` directory. The A4 final checkpoint corresponds to global step 8400: B2' step 4400 plus the preregistered 4000-step continuation. The final result assets were first published in Git commit `59b1b57`.
+
+### Resume Checklist
+
+1. Run `git pull` and read `docs/results/a4_gate/gate_report.md` before changing training code.
+2. Confirm the large local paths above still exist. Back them up before storage cleanup; GitHub does not contain checkpoints or generated images.
+3. Confirm `phase1/phase2_a4_directed_r16_4000_768x1024/checkpoints/final/READY` exists. `scripts/run_a4_gate.sh` intentionally refuses a second A4 mechanism run.
+4. Treat `eval/cf_subset.json`, held-out AdaFace hash `f2eb07d03de0`, DINOv2 hash `0b8b82f85de9`, and head-pose runner hash `61c34e877989` as frozen evaluation protocol state.
+5. For writing/analysis, use the committed A2/A4 reports and the frozen CSVs in `eval/*_metrics/`. Do not recompute only one side of a comparison with changed weights or preprocessing.
+6. If research resumes, begin with a written new hypothesis and preregistered comparator. The current A2/A4 mechanism sequence is closed; no post-hoc lambda tuning should be reported as the same experiment.
+
 ## Critical Notes
 
 - Fixed on 2026-07-07: custom FLUX training/inference paths pass timestep `tau` in `[0,1]` to `FluxTransformer2DModel` and `FluxControlNetModel`. Diffusers internally multiplies by 1000.

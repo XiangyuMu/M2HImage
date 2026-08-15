@@ -1,10 +1,10 @@
-# M2HImage FLUX Phase 1 Warmup / B2' / A2 / A4 One-shot Gate
+# M2HImage FLUX Phase 1 Warmup / B2' / A2 / A4 / Inference Analysis
 
-This repository contains the FLUX.1-dev MA-RA-CDT paired warmup, B2' adapter-only baseline, A2 differential counterfactual experiment, and the preregistered one-shot A4 identity-directed gate.
+This repository contains the FLUX.1-dev MA-RA-CDT paired warmup, B2' adapter-only baseline, A2 differential counterfactual experiment, the preregistered one-shot A4 identity-directed gate, and the post-hoc inference-only identity-velocity analysis.
 
-## Current Project Snapshot (2026-07-19)
+## Current Project Snapshot (2026-08-15)
 
-The project is intentionally paused after the completed A4 one-shot gate. No training or evaluation process is expected to be running. Code and compact result reports are on GitHub; datasets, caches, generated images, and checkpoints remain on the local data volume and are not tracked by Git.
+The project is intentionally paused after the completed A4 one-shot gate and inference-only garment-protection study. No training, generation, or evaluation process is expected to be running. Code and compact A2/A4 result reports are on GitHub; datasets, caches, generated images, checkpoints, and the new post-hoc reports remain on the local data volume and are not tracked by Git.
 
 ### Final Experiment Results
 
@@ -16,6 +16,7 @@ All decision comparisons passed the fairness-field checks for start checkpoint, 
 | B2-cont, paired-only +4000 steps | 0.4223 | 0.4088 | 0.8951 | 90.5637 | equal-step control |
 | A2 differential +4000 steps | 0.4388 | 0.4201 | 0.9016 | 89.0563 | FAIL on preregistered garment gate |
 | A4 directed identity +4000 steps | 0.4944 | 0.4794 | 0.8778 | 88.7023 | MIXED identity-garment trade-off |
+| A4 protected, pure inference | 0.4942 | 0.4788 | 0.8663 | 88.0894 | NULL: garment gap not recovered |
 
 Frozen decisions:
 
@@ -26,6 +27,10 @@ Frozen decisions:
 - A4 GarmentSim regressed from `0.8951` to `0.8778`; the deterioration test gave `p=0.00102455`. Pose variance, face detection, and detector-confidence realism did not regress. The final preregistered verdict is `MIXED`.
 - Semi-hard sampling was measurably stronger: mean training-recognizer distance increased from `0.9420` for the replayed A2 random policy to `1.1000` for A4. A4 identity-loss face-detection skip rate was `1.95%`; training `sim_gap` rose from `0.0787` in the first quartile to `0.1599` in the last quartile.
 - Qualitatively, identity response and image clarity are healthy, but garment conditioning often remains generic or mismatched. The metric regression confirms this is a real trade-off, not only a visualization artifact.
+- The post-hoc velocity probe completed 20/20 stratified trajectories. For `Delta v_io`, the normalized energy split was face `15.19%`, cloth-safe `14.00%`, body/background `58.67%`, and other `12.14%`. Cloth energy exceeded the fixed 10% feasibility threshold, so the protected sampler was evaluated.
+- Exact per-sample protection preserved identity (`sim_target=0.4942`, only `-0.00024` versus A4) but reduced GarmentSim further to `0.8663`. Against B2-cont, the garment deterioration was `-0.02878` with one-sided Wilcoxon `p=2.69e-5`; all pose, head-pose, face-detection, and detector-confidence constraints passed.
+- The recommended late window `tau=[0.0,0.2]` reached GarmentSim `0.8692` on its fixed 100-image ablation. Weak identity scale `0.3` reached `0.8708` on the same subset. Neither ablation recovered the main A4 garment gap.
+- The inference-protection verdict is `NULL`: the garment regression is primarily encoded in the trained A4 weights, rather than caused by identity conditioning that can be removed locally during sampling. No checkpoint was trained or modified, and this post-hoc result does not alter the frozen A4 `MIXED` verdict.
 
 Per preregistration, **do not launch a third mechanism-rescue run from these experiments**. The defensible project conclusion is: identity-directed counterfactual training improves identity control, but the tested objective trades away garment stability. Any future training must be framed as a new, separately preregistered study rather than an A4 retry.
 
@@ -58,6 +63,15 @@ eval/b2p_gatefix_metrics/                                 frozen B2' metrics
 eval/b2cont_metrics/                                      frozen B2-cont metrics
 eval/a2_metrics/                                          frozen A2 metrics
 eval/a4_metrics/                                          frozen A4 metrics
+eval/id_velocity/                                         20-sample velocity tensors, CSVs, plots, report
+eval/a4_prot_gen/                                         protected main run, 400 images
+eval/a4_prot_metrics/                                     protected main official metrics
+eval/a4_prot_tau_gen/                                     tau-window ablation, 100 images
+eval/a4_prot_tau_metrics/                                 tau-window official metrics
+eval/a4_prot_scale03_gen/                                 weak-scale ablation, 100 images
+eval/a4_prot_scale03_metrics/                             weak-scale official metrics
+eval/a4_prot_gate_report.md                               inference-protection fixed-rule report
+eval/a4_prot_gate_report.json                             machine-readable report
 eval/cf_subset.json                                       shared immutable evaluation subset
 ```
 
@@ -70,7 +84,8 @@ The final trainable checkpoint for each run is under its `checkpoints/final/` di
 3. Confirm `phase1/phase2_a4_directed_r16_4000_768x1024/checkpoints/final/READY` exists. `scripts/run_a4_gate.sh` intentionally refuses a second A4 mechanism run.
 4. Treat `eval/cf_subset.json`, held-out AdaFace hash `f2eb07d03de0`, DINOv2 hash `0b8b82f85de9`, and head-pose runner hash `61c34e877989` as frozen evaluation protocol state.
 5. For writing/analysis, use the committed A2/A4 reports and the frozen CSVs in `eval/*_metrics/`. Do not recompute only one side of a comparison with changed weights or preprocessing.
-6. If research resumes, begin with a written new hypothesis and preregistered comparator. The current A2/A4 mechanism sequence is closed; no post-hoc lambda tuning should be reported as the same experiment.
+6. Read `eval/id_velocity/analysis_report.md` and `eval/a4_prot_gate_report.md`. The protected-sampling result is diagnostic only and must not be presented as changing the frozen A4 verdict.
+7. If research resumes, begin with a written new hypothesis and preregistered comparator. The current A2/A4 mechanism sequence is closed; no post-hoc lambda tuning should be reported as the same experiment.
 
 ## Critical Notes
 
@@ -86,6 +101,7 @@ The final trainable checkpoint for each run is under its `checkpoints/final/` di
 - A2 failed the preregistered garment axis, but `diagnose_a2.py` found the differential losses `BOUND` and held-out DeltaID gain significant (`+0.011327`, greater-side Wilcoxon `p=2.6466e-6`). This is the fixed evidence required to proceed to A4.
 - A4 is a single final mechanism run. It adds semi-hard j/k sampling and a differentiable identity-directed decode loss, starts from the same B2' checkpoint as A2/B2-cont, and reuses the existing B2-cont as control. No third rescue training run is permitted.
 - The completed A4 gate verdict is `MIXED`: held-out identity improved strongly (`sim_target +0.0721`, greater-side Wilcoxon `p<1e-8`), while GarmentSim regressed from `0.8951` to `0.8778` (`p=0.0010`). Per preregistration, this is reported as an identity-garment trade-off and no further mechanism run is authorized.
+- The inference-only protected sampler uses two identity branches with one shared ControlNet result per Euler step: `v = v_on - M_protect * (v_on - v_off)`. Its completed fixed-rule verdict is `NULL`; it preserves A4 identity but does not recover garment stability. LoRA interpolation is noted only as future work and was not run.
 - Held-out AdaFace IR-101 is evaluation-only. A4 training uses frozen Glint360K ArcFace `glintr100.onnx`, converted to a differentiable PyTorch graph with `onnx2torch`; training code fails if an AdaFace path is configured.
 
 ## Active Files
@@ -95,6 +111,7 @@ configs/warmup.yaml              FLUX Phase 1 PuLID/native-resolution config
 configs/a2_diff.yaml             A2: equal-step continuation with teach/invariance/hinge losses
 configs/b2_cont.yaml             B2-cont: equal-step paired-only continuation
 configs/a4_directed.yaml         A4: A2 losses + semi-hard sampling + directed identity decode loss
+configs/a4_protected.yaml        inference-only velocity/protection protocol and fixed thresholds
 pulid_flux.py                    frozen PuLID-FLUX v0.9.1 loader, ID embedder, transformer hook self-check
 build_cache.py                   offline latent/text/PuLID-ID/appearance/garment_grid/head-pose cache
 build_region_masks_z.py          CPU builder for cloth/body-bg/face packed-token masks
@@ -108,16 +125,44 @@ eval_b2.py                       frozen B2 subset/generation/report entry
 eval_b2_metrics.py               official offline B2 metrics: held-out DeltaID, head-pose MAE, GarmentSim
 eval_gate_report.py              A2 vs B2-cont fairness check, paired tests, tail analysis, verdict
 eval_a4_gate_report.py           one-shot identity-axis A4 vs B2-cont preregistered verdict
+analyze_id_velocity.py           real-trajectory regional energy, low-rank, and consistency probe
+sampling_protected.py            isolated dual-forward protected Euler sampler and 4-GPU sharding
+eval_protected_gate.py           protected vs A4/B2-cont fixed-rule paired report
 scripts/sanity_flux_timestep.py  prompt-only FLUX timestep sanity check
 scripts/verify_condition_gates.py real FLUX/ControlNet/PuLID one-step gate verification
 scripts/a2_vram_probe.py         real 1x ControlNet + 3x transformer differential VRAM probe
 scripts/a4_vram_probe.py         complete A4 step probe including in-graph decode and F_train backward
 scripts/run_a2_gate.sh           sequential A2/B2-cont training, generation, metrics, gate report
 scripts/run_a4_gate.sh           unique A4 train, frozen metrics, and final PASS/FAIL/MIXED report
+scripts/run_protected_inference.sh Part A, smoke, main/ablation generation, metrics, and NULL gate
 scripts/run_phase1_pipeline.sh   cache check + complete gatefix pipeline
 scripts/run_gatefix_to_b2.sh     4400-step train, watcher hard gate, B2' generation and metrics
 scripts/run_b2_generation.sh     multi-GPU B2' generation helper
 ```
+
+## Inference-only Identity Velocity And Garment Protection
+
+This study is isolated from the frozen A4 path. It loads the final A4 checkpoint read-only and never resumes training. At each Euler step, the protected sampler computes one identity-independent ControlNet result and reuses it for the identity-on and identity-weak transformer branches:
+
+```text
+v_protected = v_on - M_protect * (v_on - v_weak)
+```
+
+The main run uses `cloth_safe`, one-token dilation, all timesteps, and `weak_mode=off`. Part A selected `tau=[0.0,0.2]` for the fixed-window ablation; the second ablation uses `weak_mode=scale03`. Run the stages independently:
+
+```bash
+scripts/run_protected_inference.sh analyze
+scripts/run_protected_inference.sh smoke
+scripts/run_protected_inference.sh main
+scripts/run_protected_inference.sh main-metrics
+scripts/run_protected_inference.sh tau-ablation
+scripts/run_protected_inference.sh tau-metrics
+scripts/run_protected_inference.sh scale03-ablation
+scripts/run_protected_inference.sh scale03-metrics
+scripts/run_protected_inference.sh gate
+```
+
+The analysis completed 20 stratified mids and stored only that subset's bf16 velocities. Main generation completed 400/400 images; each ablation completed 100/100, with no per-image failures. All generated images are native `768x1024`. The final report is `eval/a4_prot_gate_report.md`; its fixed verdict is `NULL`.
 
 ## PuLID Assets
 

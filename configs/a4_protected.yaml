@@ -1,0 +1,55 @@
+extends: a4_directed.yaml
+
+# Inference-only analysis/protection configuration. This file never changes or
+# resumes A4 training, and all outputs use new directories.
+inference_protection:
+  checkpoint: /data/muxiangyu/datasets/M2HImage/M2H_Final_v2/phase1/phase2_a4_directed_r16_4000_768x1024/checkpoints/final
+  subset: eval/cf_subset.json
+  steps: 20
+  protect_mask: cloth_safe
+  protect_dilation: 1
+  protect_tau_range: [0.0, 1.0]
+  weak_mode: "off"
+  weak_scale: 0.3
+  output_dir: eval/a4_prot_gen
+  metrics_dir: eval/a4_prot_metrics
+  generation_status: eval/a4_prot_generation_status
+  smoke_output_dir: eval/a4_prot_smoke
+  references:
+    a4_metrics_dir: eval/a4_metrics
+    b2cont_metrics_dir: eval/b2cont_metrics
+    b2p_metrics_dir: eval/b2p_gatefix_metrics
+  analysis:
+    output_dir: eval/id_velocity
+    sample_count: 20
+    seed: 0
+    tau_bins:
+      - [0.8, 1.000001]
+      - [0.5, 0.8]
+      - [0.2, 0.5]
+      - [0.0, 0.2]
+    svd_q: 100
+    svd_niter: 4
+    cloth_energy_null_threshold: 0.10
+    store_velocities_bf16: true
+  ablations:
+    mid_count: 25
+    identities_per_mid: 2
+    tau_window:
+      output_dir: eval/a4_prot_tau_gen
+      metrics_dir: eval/a4_prot_tau_metrics
+      subset_path: eval/a4_prot_ablation_subset.json
+    scale03:
+      output_dir: eval/a4_prot_scale03_gen
+      metrics_dir: eval/a4_prot_scale03_metrics
+      subset_path: eval/a4_prot_ablation_subset.json
+  gate:
+    report: eval/a4_prot_gate_report.md
+    garment_tolerance: 0.005
+    garment_partial_threshold: 0.8865
+    identity_a4_tolerance: 0.010
+    pose_variance_tolerance: 0.005
+    headpose_mae_tolerance_deg: 0.5
+    face_detection_min: 0.95
+    face_confidence_tolerance: 0.01
+    significance_alpha: 0.05

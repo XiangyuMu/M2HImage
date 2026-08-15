@@ -36,9 +36,11 @@ inference_protection:
     mid_count: 25
     identities_per_mid: 2
     tau_window:
+      # Analysis-selected window promoted to a co-primary 400-image protocol.
+      co_primary: true
       output_dir: eval/a4_prot_tau_gen
       metrics_dir: eval/a4_prot_tau_metrics
-      subset_path: eval/a4_prot_ablation_subset.json
+      smoke_output_dir: eval/a4_prot_tau_smoke
     scale03:
       output_dir: eval/a4_prot_scale03_gen
       metrics_dir: eval/a4_prot_scale03_metrics

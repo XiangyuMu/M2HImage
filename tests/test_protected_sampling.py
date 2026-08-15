@@ -9,6 +9,7 @@ from analyze_id_velocity import find_tau_bin, low_rank_analysis, select_stratifi
 from conditions import load_yaml
 from sampling_protected import (
     build_protect_mask,
+    mode_settings,
     normalized_region_partition,
     protected_velocity,
     subset_pairs_for_ablation,
@@ -64,6 +65,19 @@ def test_tau_window_and_weak_modes() -> None:
 def test_protection_yaml_preserves_off_as_a_string() -> None:
     cfg = load_yaml('configs/a4_protected.yaml')
     assert cfg['inference_protection']['weak_mode'] == 'off'
+    assert cfg['inference_protection']['ablations']['tau_window']['co_primary'] is True
+
+
+def test_tau_window_is_a_full_subset_co_primary(tmp_path) -> None:
+    cfg = load_yaml('configs/a4_protected.yaml')
+    analysis_dir = tmp_path / cfg['inference_protection']['analysis']['output_dir']
+    analysis_dir.mkdir(parents=True)
+    (analysis_dir / 'analysis_summary.json').write_text(
+        '{"recommended_protect_tau_range": [0.0, 0.2]}\n', encoding='utf-8'
+    )
+    settings = mode_settings(cfg, 'tau_window', tmp_path)
+    assert settings['protect_tau_range'] == [0.0, 0.2]
+    assert settings['is_ablation'] is False
 
 
 def make_subset(mid_count: int = 50) -> dict:

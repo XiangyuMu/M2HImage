@@ -15,6 +15,10 @@ case "$PHASE" in
   smoke)
     "$PYTHON" sampling_protected.py --config "$CONFIG" --device cuda:0 --smoke 2 --overwrite
     ;;
+  tau-smoke)
+    "$PYTHON" sampling_protected.py --config "$CONFIG" --device cuda:0 --mode tau_window \
+      --smoke 2 --output-dir eval/a4_prot_tau_smoke --overwrite
+    ;;
   main)
     "$PYTHON" -m torch.distributed.run --standalone --master-port "$MASTER_PORT" \
       --nproc-per-node "$NPROC" sampling_protected.py --config "$CONFIG" --mode main
@@ -23,12 +27,12 @@ case "$PHASE" in
     "$PYTHON" eval_b2_metrics.py --config "$CONFIG" --subset eval/cf_subset.json --gen-dir eval/a4_prot_gen \
       --out-dir eval/a4_prot_metrics --report eval/a4_prot_metrics/report.md --metrics all --device cuda:0
     ;;
-  tau-ablation)
+  tau-main|tau-ablation)
     "$PYTHON" -m torch.distributed.run --standalone --master-port "$MASTER_PORT" --nproc-per-node "$NPROC" sampling_protected.py \
       --config "$CONFIG" --mode tau_window
     ;;
   tau-metrics)
-    "$PYTHON" eval_b2_metrics.py --config "$CONFIG" --subset eval/a4_prot_ablation_subset.json \
+    "$PYTHON" eval_b2_metrics.py --config "$CONFIG" --subset eval/cf_subset.json \
       --gen-dir eval/a4_prot_tau_gen --out-dir eval/a4_prot_tau_metrics \
       --report eval/a4_prot_tau_metrics/report.md --metrics all --device cuda:0
     ;;
@@ -46,6 +50,6 @@ case "$PHASE" in
     ;;
   *)
     printf '%s\n' \
-      'usage: scripts/run_protected_inference.sh {analyze|smoke|main|main-metrics|tau-ablation|tau-metrics|scale03-ablation|scale03-metrics|gate}'
+      'usage: scripts/run_protected_inference.sh {analyze|smoke|tau-smoke|main|main-metrics|tau-main|tau-metrics|scale03-ablation|scale03-metrics|gate}'
     ;;
 esac

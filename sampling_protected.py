@@ -337,11 +337,12 @@ def mode_settings(cfg: dict[str, Any], mode: str, root: Path) -> dict[str, Any]:
         'is_ablation': False,
     }
     if mode == 'tau_window':
-        settings['output_dir'] = pcfg['ablations']['tau_window']['output_dir']
-        settings['metrics_dir'] = pcfg['ablations']['tau_window']['metrics_dir']
+        tau_cfg = pcfg['ablations']['tau_window']
+        settings['output_dir'] = tau_cfg['output_dir']
+        settings['metrics_dir'] = tau_cfg['metrics_dir']
         settings['protect_tau_range'] = read_recommended_tau_range(root, pcfg['analysis']['output_dir'])
         settings['weak_mode'] = 'off'
-        settings['is_ablation'] = True
+        settings['is_ablation'] = not bool(tau_cfg.get('co_primary', False))
     elif mode == 'scale03':
         settings['output_dir'] = pcfg['ablations']['scale03']['output_dir']
         settings['metrics_dir'] = pcfg['ablations']['scale03']['metrics_dir']

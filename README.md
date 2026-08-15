@@ -16,7 +16,8 @@ All decision comparisons passed the fairness-field checks for start checkpoint, 
 | B2-cont, paired-only +4000 steps | 0.4223 | 0.4088 | 0.8951 | 90.5637 | equal-step control |
 | A2 differential +4000 steps | 0.4388 | 0.4201 | 0.9016 | 89.0563 | FAIL on preregistered garment gate |
 | A4 directed identity +4000 steps | 0.4944 | 0.4794 | 0.8778 | 88.7023 | MIXED identity-garment trade-off |
-| A4 protected, pure inference | 0.4942 | 0.4788 | 0.8663 | 88.0894 | NULL: garment gap not recovered |
+| A4 protected all-step, pure inference | 0.4942 | 0.4788 | 0.8663 | 88.0894 | NULL: gap recovery -66.49% |
+| A4 protected tau=[0,0.2], pure inference | 0.4944 | 0.4794 | 0.8777 | 88.7433 | NULL: gap recovery -0.68% |
 
 Frozen decisions:
 
@@ -28,9 +29,10 @@ Frozen decisions:
 - Semi-hard sampling was measurably stronger: mean training-recognizer distance increased from `0.9420` for the replayed A2 random policy to `1.1000` for A4. A4 identity-loss face-detection skip rate was `1.95%`; training `sim_gap` rose from `0.0787` in the first quartile to `0.1599` in the last quartile.
 - Qualitatively, identity response and image clarity are healthy, but garment conditioning often remains generic or mismatched. The metric regression confirms this is a real trade-off, not only a visualization artifact.
 - The post-hoc velocity probe completed 20/20 stratified trajectories. For `Delta v_io`, the normalized energy split was face `15.19%`, cloth-safe `14.00%`, body/background `58.67%`, and other `12.14%`. Cloth energy exceeded the fixed 10% feasibility threshold, so the protected sampler was evaluated.
-- Exact per-sample protection preserved identity (`sim_target=0.4942`, only `-0.00024` versus A4) but reduced GarmentSim further to `0.8663`. Against B2-cont, the garment deterioration was `-0.02878` with one-sided Wilcoxon `p=2.69e-5`; all pose, head-pose, face-detection, and detector-confidence constraints passed.
-- The recommended late window `tau=[0.0,0.2]` reached GarmentSim `0.8692` on its fixed 100-image ablation. Weak identity scale `0.3` reached `0.8708` on the same subset. Neither ablation recovered the main A4 garment gap.
-- The inference-protection verdict is `NULL`: the garment regression is primarily encoded in the trained A4 weights, rather than caused by identity conditioning that can be removed locally during sampling. No checkpoint was trained or modified, and this post-hoc result does not alter the frozen A4 `MIXED` verdict.
+- Exact all-step protection preserved identity (`sim_target=0.494153`, only `-0.000244` versus A4) but reduced GarmentSim further to `0.866307`. It recovered `-66.49%` of the A4-to-B2-cont gap; the B2-cont deterioration test gave `p=2.69e-5`.
+- The analysis-selected `tau=[0.0,0.2]` protocol was promoted to a co-primary full 400-image run. It reached GarmentSim `0.877685`, recovering `-0.68%` of the gap, while `sim_target=0.494381` dropped only `0.000015` from A4. Its B2-cont deterioration remained significant (`p=0.0009546`). Pose, head-pose, face detection, and detector-confidence constraints passed.
+- Weak identity scale `0.3` remains a fixed 100-image secondary ablation (`GarmentSim=0.8708`) and is not used for either co-primary verdict.
+- Both inference-protection verdicts are `NULL`: all-step protection worsens the garment trade-off, while late-window protection is nearly identity/garment neutral relative to A4 but recovers none of the B2-cont gap. The regression is primarily encoded in the trained A4 weights rather than removable online identity conditioning. No checkpoint was trained or modified, and this post-hoc result does not alter the frozen A4 `MIXED` verdict.
 
 Per preregistration, **do not launch a third mechanism-rescue run from these experiments**. The defensible project conclusion is: identity-directed counterfactual training improves identity control, but the tested objective trades away garment stability. Any future training must be framed as a new, separately preregistered study rather than an A4 retry.
 
@@ -66,8 +68,8 @@ eval/a4_metrics/                                          frozen A4 metrics
 eval/id_velocity/                                         20-sample velocity tensors, CSVs, plots, report
 eval/a4_prot_gen/                                         protected main run, 400 images
 eval/a4_prot_metrics/                                     protected main official metrics
-eval/a4_prot_tau_gen/                                     tau-window ablation, 100 images
-eval/a4_prot_tau_metrics/                                 tau-window official metrics
+eval/a4_prot_tau_gen/                                     tau-window co-primary, 400 images
+eval/a4_prot_tau_metrics/                                 tau-window co-primary official metrics
 eval/a4_prot_scale03_gen/                                 weak-scale ablation, 100 images
 eval/a4_prot_scale03_metrics/                             weak-scale official metrics
 eval/a4_prot_gate_report.md                               inference-protection fixed-rule report
@@ -101,7 +103,7 @@ The final trainable checkpoint for each run is under its `checkpoints/final/` di
 - A2 failed the preregistered garment axis, but `diagnose_a2.py` found the differential losses `BOUND` and held-out DeltaID gain significant (`+0.011327`, greater-side Wilcoxon `p=2.6466e-6`). This is the fixed evidence required to proceed to A4.
 - A4 is a single final mechanism run. It adds semi-hard j/k sampling and a differentiable identity-directed decode loss, starts from the same B2' checkpoint as A2/B2-cont, and reuses the existing B2-cont as control. No third rescue training run is permitted.
 - The completed A4 gate verdict is `MIXED`: held-out identity improved strongly (`sim_target +0.0721`, greater-side Wilcoxon `p<1e-8`), while GarmentSim regressed from `0.8951` to `0.8778` (`p=0.0010`). Per preregistration, this is reported as an identity-garment trade-off and no further mechanism run is authorized.
-- The inference-only protected sampler uses two identity branches with one shared ControlNet result per Euler step: `v = v_on - M_protect * (v_on - v_off)`. Its completed fixed-rule verdict is `NULL`; it preserves A4 identity but does not recover garment stability. LoRA interpolation is noted only as future work and was not run.
+- The inference-only protected sampler uses two identity branches with one shared ControlNet result per Euler step: `v = v_on - M_protect * (v_on - v_off)`. Both completed co-primary fixed-rule verdicts are `NULL`; the late window preserves A4 identity and garment values but does not recover the B2-cont garment gap. LoRA interpolation is noted only as future work and was not run.
 - Held-out AdaFace IR-101 is evaluation-only. A4 training uses frozen Glint360K ArcFace `glintr100.onnx`, converted to a differentiable PyTorch graph with `onnx2torch`; training code fails if an AdaFace path is configured.
 
 ## Active Files
@@ -148,21 +150,22 @@ This study is isolated from the frozen A4 path. It loads the final A4 checkpoint
 v_protected = v_on - M_protect * (v_on - v_weak)
 ```
 
-The main run uses `cloth_safe`, one-token dilation, all timesteps, and `weak_mode=off`. Part A selected `tau=[0.0,0.2]` for the fixed-window ablation; the second ablation uses `weak_mode=scale03`. Run the stages independently:
+Both co-primary runs use `cloth_safe`, one-token dilation, and `weak_mode=off`. One protects all timesteps; Part A selected `tau=[0.0,0.2]` for the second. The secondary 100-image ablation uses `weak_mode=scale03`. Run the stages independently:
 
 ```bash
 scripts/run_protected_inference.sh analyze
 scripts/run_protected_inference.sh smoke
+scripts/run_protected_inference.sh tau-smoke
 scripts/run_protected_inference.sh main
 scripts/run_protected_inference.sh main-metrics
-scripts/run_protected_inference.sh tau-ablation
+scripts/run_protected_inference.sh tau-main
 scripts/run_protected_inference.sh tau-metrics
 scripts/run_protected_inference.sh scale03-ablation
 scripts/run_protected_inference.sh scale03-metrics
 scripts/run_protected_inference.sh gate
 ```
 
-The analysis completed 20 stratified mids and stored only that subset's bf16 velocities. Main generation completed 400/400 images; each ablation completed 100/100, with no per-image failures. All generated images are native `768x1024`. The final report is `eval/a4_prot_gate_report.md`; its fixed verdict is `NULL`.
+The analysis completed 20 stratified mids and stored only that subset's bf16 velocities. Both co-primary protocols completed 400/400 images; scale03 completed 100/100, with no per-image failures. All generated images are native `768x1024`. The final report judges each co-primary independently in `eval/a4_prot_gate_report.md`; both fixed verdicts are `NULL`.
 
 ## PuLID Assets
 

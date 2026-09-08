@@ -1,0 +1,22 @@
+{
+  "status": "HOLD_REBOOT",
+  "observed_at": "2026-09-08T15:42:00+08:00",
+  "launch_boot_id": "c0d47840-12f5-4125-9126-4c79e98884c2",
+  "current_boot_id": "42d48d90-5e25-4345-aef0-d00f7e585f41",
+  "boots_local": ["2026-09-08 14:55:28", "2026-09-08 15:08:23"],
+  "processes_running": false,
+  "automatic_gpu_relaunch_allowed": false,
+  "queue_json_is_stale": true,
+  "verified_training_update_rows": 11,
+  "pilot_checkpoints_found": 0,
+  "training_log_null_bytes": 1701,
+  "teacher_json_rows": 29,
+  "teacher_endpoints_hash_shape_finite_verified": 29,
+  "teacher_pngs_hash_decode_verified": 27,
+  "zero_byte_pngs": ["02574__id40970__seed0.png", "42942__id32025__seed0.png"],
+  "cache_files_hash_verified": 800,
+  "conservative_gpu_hours_upper_bound_rounded": 1.16,
+  "cause": "unknown; kernel journal access restricted",
+  "next_action": "read-only monitoring; establish reboot cause/stability before any GPU retry",
+  "previous_eta_valid": false
+}

@@ -187,7 +187,7 @@ def make_cf_batch(cache: Path, text_cache: Path, mannequin_id: str, identity_id:
     m = np.load(cache / f'{mannequin_id}.npz')
     j = np.load(cache / f'{identity_id}.npz')
     text = np.load(text_cache)
-    return {
+    batch = {
         'pose_latents': torch.from_numpy(np.asarray(m['pose_latents'])).float(),
         'pulid_id_embed': torch.from_numpy(np.asarray(j['pulid_id_embed'])).float(),
         'appearance': torch.from_numpy(np.asarray(j['appearance'])).float(),
@@ -196,6 +196,23 @@ def make_cf_batch(cache: Path, text_cache: Path, mannequin_id: str, identity_id:
         'prompt_embeds': torch.from_numpy(np.asarray(text['prompt_embeds'])).float(),
         'pooled_prompt_embeds': torch.from_numpy(np.asarray(text['pooled_prompt_embeds'])).float(),
     }
+    if 'garment_ref_latents' in m.files:
+        batch['garment_ref_latents'] = torch.from_numpy(np.asarray(m['garment_ref_latents'])).float()
+    for key in ('hair_ref_tokens', 'hair_ref_positions', 'hair_ref_mask'):
+        if key in j.files:
+            batch[key] = torch.from_numpy(np.asarray(j[key])).float()
+    for key in ('hair_semantic_tokens', 'hair_semantic_mask'):
+        if key in j.files:
+            batch[key] = torch.from_numpy(np.asarray(j[key])).float()
+    if 'hair_ref_latents' in j.files:
+        batch['hair_ref_latents'] = torch.from_numpy(
+            np.asarray(j['hair_ref_latents'])
+        ).float()
+        batch['hair_ref_empty'] = torch.tensor(
+            int(np.asarray(j['hair_ref_empty']).reshape(-1)[0]),
+            dtype=torch.float32,
+        )
+    return batch
 
 
 def generate_b2(cfg: dict, ckpt: Path, subset: dict, device: str, overwrite: bool, limit: int | None, num_shards: int = 1, shard_index: int = 0) -> int:

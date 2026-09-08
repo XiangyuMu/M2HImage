@@ -1,0 +1,66 @@
+data:
+  train_bs: 1
+  val_bs: 1
+  num_processes: 2
+  train_width: 512
+  train_height: 512
+  meta_paths: []
+  texture_clip_condition: false
+  texture_unet_condition: true
+  root_dir: "/home/muxiangyu/programs/M2H_Baselines_2026/layouts/low/paired/mcld/"
+  pose_type: "densepose"
+  clip_type: "whole_body"
+  use_face_emb: true
+
+solver:
+  gradient_accumulation_steps: 8
+  mixed_precision: "fp16"
+  enable_xformers_memory_efficient_attention: true
+  gradient_checkpointing: true
+  max_train_steps: 60000
+  max_grad_norm: 1.0
+  learning_rate: 1.0e-5
+  scale_lr: false
+  lr_warmup_steps: 1
+  lr_scheduler: "constant"
+  use_8bit_adam: true
+  offload_frozen_models_between_steps: true
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_weight_decay: 0.01
+  adam_epsilon: 1.0e-8
+
+val:
+  validation_steps: 1000
+
+noise_scheduler_kwargs:
+  num_train_timesteps: 1000
+  beta_start: 0.00085
+  beta_end: 0.012
+  beta_schedule: "scaled_linear"
+  steps_offset: 1
+  clip_sample: false
+
+base_model_path: "/home/muxiangyu/programs/M2H_Baselines_2026/models/mcld/sd-image-variations-diffusers"
+vae_model_path: "/home/muxiangyu/programs/M2H_Baselines_2026/models/mcld/sd-vae-ft-mse"
+image_encoder_path: "/home/muxiangyu/programs/M2H_Baselines_2026/models/mcld/sd-image-variations-diffusers/image_encoder"
+controlnet_openpose_path: "/home/muxiangyu/programs/M2H_Baselines_2026/models/mcld/control_v11p_sd15_seg/diffusion_pytorch_model.bin"
+pretrained_base_model_path: "/home/muxiangyu/programs/M2H_Baselines_2026/models/mcld/stable-diffusion-v1-5"
+pretrained_vae_path: "/home/muxiangyu/programs/M2H_Baselines_2026/models/mcld/sd-vae-ft-mse"
+inference_config: "./configs/inference/inference_v3.yaml"
+
+weight_dtype: "fp16"
+uncond_ratio: 0.1
+noise_offset: 0.05
+snr_gamma: 5.0
+enable_zero_snr: true
+pose_guider_pretrain: true
+device: "cuda"
+seed: 42
+resume_from_checkpoint: ""
+checkpointing_steps: 2000
+save_model_epoch_interval: 1
+exp_name: "mcld_m2h_full"
+output_dir: "/home/muxiangyu/programs/M2H_Baselines_2026/runs/mcld/full"
+cond_chan: 3
+no_save: false

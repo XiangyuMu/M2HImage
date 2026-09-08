@@ -38,3 +38,28 @@ dist/
 # Codex/local workspace metadata
 .agents/
 .codex/
+
+# Machine-local state, credentials, and patch/merge leftovers
+.omx/
+.env
+.env.*
+*.pem
+*.key
+*.orig
+*.rej
+*.code-workspace
+.DS_Store
+
+# External baseline checkouts are not authored by this project.
+/comparisons/**/repos/
+
+# Experiment data and runtime payloads are not code backups.
+*.log
+*.jsonl
+*.csv
+*.tsv
+*.zip
+*.tar
+*.gz
+*.bin
+*.mp4

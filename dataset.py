@@ -10,11 +10,47 @@ from torch.utils.data import Dataset, DistributedSampler
 
 from conditions import get_resolution, read_ids
 
-SAMPLE_CACHE_KEYS = (
+BASE_SAMPLE_CACHE_KEYS = (
     'target_latents', 'pose_latents', 'pulid_id_embed', 'appearance', 'garment_grid', 'head_pose'
 )
+SPATIAL_GARMENT_KEYS = ('garment_ref_latents',)
+SPATIAL_HEAD_KEYS = ('pose_synth_latents',)
+SPATIAL_HAIR_TOKEN_KEYS = ('hair_ref_tokens', 'hair_ref_positions', 'hair_ref_mask')
+SPATIAL_HAIR_SEMANTIC_KEYS = ('hair_semantic_tokens', 'hair_semantic_mask')
+SPATIAL_HAIR_REFERENCE_KEYS = ('hair_ref_latents', 'hair_ref_empty')
+# Backward-compatible import used by older differential tooling.
+SPATIAL_HAIR_KEYS = SPATIAL_HAIR_TOKEN_KEYS
+# Retained for imports in older tooling. Runtime coverage uses sample_cache_keys(config).
+SAMPLE_CACHE_KEYS = BASE_SAMPLE_CACHE_KEYS
 TEXT_CACHE_KEYS = ('prompt_embeds', 'pooled_prompt_embeds')
 DIFFERENTIAL_MASK_KEYS = ('cloth_safe_z', 'body_bg_z', 'face_z')
+PAIRED_REGION_MASK_KEYS = ('cloth_safe_z', 'hair_z', 'face_z')
+
+
+def sample_cache_keys(config: dict[str, Any]) -> tuple[str, ...]:
+    spatial = config.get('model', {}).get('spatial_conditions', {})
+    adapter = config.get('model', {}).get('identity_adapter', {})
+    keys = list(BASE_SAMPLE_CACHE_KEYS)
+    if spatial.get('garment_reference', {}).get('enabled', False):
+        keys.extend(SPATIAL_GARMENT_KEYS)
+    if spatial.get('head_control', {}).get('enabled', False):
+        keys.extend(SPATIAL_HEAD_KEYS)
+    hair_cfg = spatial.get('hair', {})
+    hair_loss_enabled = bool(
+        config.get('training', {}).get('hair_loss', {}).get('enabled', False)
+    )
+    hair_tokens_enabled = bool(adapter.get('use_hair_tokens', False))
+    hair_token_mode = str(adapter.get('hair_token_mode', 'dense_with_position')).lower()
+    retain_legacy = bool(adapter.get('retain_legacy_hair_parameters_for_resume', False))
+    if hair_loss_enabled or retain_legacy or (
+        hair_tokens_enabled and hair_token_mode != 'semantic_dense'
+    ):
+        keys.extend(SPATIAL_HAIR_TOKEN_KEYS)
+    if hair_tokens_enabled and hair_token_mode == 'semantic_dense':
+        keys.extend(SPATIAL_HAIR_SEMANTIC_KEYS)
+    if hair_cfg.get('reference', {}).get('enabled', False):
+        keys.extend(SPATIAL_HAIR_REFERENCE_KEYS)
+    return tuple(dict.fromkeys(keys))
 
 
 class IdentityBank:
@@ -229,12 +265,58 @@ class PairedWarmupDataset(Dataset):
         self.cache_dir = self.root / config['data']['cache_dir']
         width, height = get_resolution(config['data']['resolution'])
         self.token_count = (height // 16) * (width // 16)
+        self.sample_cache_keys = sample_cache_keys(config)
         self.prompt_cache = self.cache_dir / 'text' / 'prompt.npz'
         self.split = split
         self.head_pose_dropout = float(config.get('training', {}).get('head_pose_dropout', 0.0)) if split == 'train' else 0.0
         self.base_seed = int(config.get('experiment', {}).get('seed', 0))
+        spatial = config.get('model', {}).get('spatial_conditions', {})
+        self.garment_reference_enabled = bool(spatial.get('garment_reference', {}).get('enabled', False))
+        head_cfg = spatial.get('head_control', {})
+        self.head_control_enabled = bool(head_cfg.get('enabled', False))
+        self.synthetic_head_probability = float(head_cfg.get('synthetic_probability', 0.5)) if split == 'train' else 0.0
+        hair_cfg = spatial.get('hair', {})
+        self.spatial_hair_enabled = bool(hair_cfg.get('enabled', False))
+        adapter_cfg = config.get('model', {}).get('identity_adapter', {})
+        self.hair_enabled = bool(adapter_cfg.get('use_hair_tokens', False))
+        self.hair_token_mode = str(
+            adapter_cfg.get('hair_token_mode', 'dense_with_position')
+        ).lower()
+        if self.hair_token_mode not in {'dense_with_position', 'semantic_dense'}:
+            raise ValueError(f'unknown hair_token_mode={self.hair_token_mode!r}')
+        self.semantic_hair_enabled = bool(
+            self.hair_enabled and self.hair_token_mode == 'semantic_dense'
+        )
+        self.hair_loss_target_assets_enabled = bool(
+            config.get('training', {}).get('hair_loss', {}).get('enabled', False)
+        )
+        self.hair_token_assets_enabled = bool(
+            self.hair_loss_target_assets_enabled
+            or adapter_cfg.get('retain_legacy_hair_parameters_for_resume', False)
+            or (self.hair_enabled and not self.semantic_hair_enabled)
+        )
+        self.hair_reference_enabled = bool(
+            hair_cfg.get('reference', {}).get('enabled', False)
+        )
+        if not 0.0 <= self.synthetic_head_probability <= 1.0:
+            raise ValueError(
+                f'head synthetic_probability must be in [0,1], got {self.synthetic_head_probability}'
+            )
         differential = config.get('training', {}).get('differential', {})
         self.differential_enabled = bool(differential.get('enabled', False)) and split == 'train'
+        pair_region = config.get('training', {}).get('paired_region_weighting', {})
+        hair_loss = config.get('training', {}).get('hair_loss', {})
+        self.paired_region_weighting_enabled = (
+            bool(pair_region.get('enabled', False)) and split == 'train'
+        )
+        self.paired_hair_loss_enabled = (
+            bool(hair_loss.get('enabled', False)) and split == 'train'
+        )
+        self.region_mask_keys = set()
+        if self.differential_enabled:
+            self.region_mask_keys.update(DIFFERENTIAL_MASK_KEYS)
+        if self.paired_region_weighting_enabled or self.paired_hair_loss_enabled:
+            self.region_mask_keys.update(PAIRED_REGION_MASK_KEYS)
         self.differential_sampling = str(differential.get('sampling', 'random')).lower()
         self.semihard_pool = int(differential.get('semihard_pool', 8))
         self.region_masks_z_dir = self.root / config['data'].get('region_masks_z_dir', 'derived/region_masks_z')
@@ -252,6 +334,58 @@ class PairedWarmupDataset(Dataset):
     def sample_path(self, sample_id: str) -> Path:
         return self.cache_dir / 'samples' / f'{sample_id}.npz'
 
+    def _sample_shape_errors(self, path: Path, row) -> list[str]:
+        errors = []
+        latent_keys = ['target_latents', 'pose_latents']
+        if self.garment_reference_enabled:
+            latent_keys.append('garment_ref_latents')
+        if self.hair_reference_enabled:
+            latent_keys.append('hair_ref_latents')
+        if self.head_control_enabled:
+            latent_keys.append('pose_synth_latents')
+        for key in latent_keys:
+            if key in row.files and np.asarray(row[key]).shape != (self.token_count, 64):
+                errors.append(
+                    f'{path}: {key} shape={np.asarray(row[key]).shape}, '
+                    f'expected {(self.token_count, 64)}'
+                )
+        if self.hair_token_assets_enabled:
+            adapter_cfg = self.config['model']['identity_adapter']
+            count = int(adapter_cfg.get('hair_ref_max_tokens', 64))
+            dim = int(adapter_cfg.get('hair_ref_dim', 768))
+            expected = {
+                'hair_ref_tokens': (count, dim),
+                'hair_ref_positions': (count, 2),
+                'hair_ref_mask': (count,),
+            }
+            for key, shape in expected.items():
+                if key in row.files and np.asarray(row[key]).shape != shape:
+                    errors.append(f'{path}: {key} shape={np.asarray(row[key]).shape}, expected {shape}')
+            if 'hair_ref_mask' in row.files:
+                valid = np.asarray(row['hair_ref_mask'], dtype=np.float32)
+                if not np.isfinite(valid).all():
+                    errors.append(f'{path}: hair_ref_mask contains non-finite values')
+        if self.semantic_hair_enabled:
+            adapter_cfg = self.config['model']['identity_adapter']
+            count = int(adapter_cfg.get('hair_semantic_max_tokens', 32))
+            dim = int(adapter_cfg.get('hair_ref_dim', 768))
+            expected = {
+                'hair_semantic_tokens': (count, dim),
+                'hair_semantic_mask': (count,),
+            }
+            for key, shape in expected.items():
+                if key in row.files and np.asarray(row[key]).shape != shape:
+                    errors.append(f'{path}: {key} shape={np.asarray(row[key]).shape}, expected {shape}')
+        if self.hair_reference_enabled and 'hair_ref_empty' in row.files:
+            empty = np.asarray(row['hair_ref_empty'])
+            if empty.shape not in ((), (1,)):
+                errors.append(
+                    f'{path}: hair_ref_empty shape={empty.shape}, expected scalar'
+                )
+            elif int(empty.reshape(-1)[0]) not in (0, 1):
+                errors.append(f'{path}: hair_ref_empty must be 0 or 1')
+        return errors
+
     def assert_coverage(self) -> None:
         missing = []
         bad = []
@@ -262,22 +396,26 @@ class PairedWarmupDataset(Dataset):
                 continue
             try:
                 with np.load(path, mmap_mode='r') as row:
-                    absent = [key for key in SAMPLE_CACHE_KEYS if key not in row.files]
+                    absent = [key for key in self.sample_cache_keys if key not in row.files]
                     if absent:
                         bad.append(f'{path}: missing keys {absent}')
+                    bad.extend(self._sample_shape_errors(path, row))
             except Exception as exc:  # noqa: BLE001
                 bad.append(f'{path}: unreadable cache ({exc})')
-            if self.differential_enabled:
+            if self.region_mask_keys:
                 mask_path = self.region_masks_z_dir / f'{sid}.npz'
                 if not mask_path.exists():
                     missing.append(str(mask_path))
                 else:
                     try:
                         with np.load(mask_path, mmap_mode='r') as mask_row:
-                            absent = [key for key in DIFFERENTIAL_MASK_KEYS if key not in mask_row.files]
+                            absent = [
+                                key for key in sorted(self.region_mask_keys)
+                                if key not in mask_row.files
+                            ]
                             if absent:
                                 bad.append(f'{mask_path}: missing keys {absent}')
-                            for key in DIFFERENTIAL_MASK_KEYS:
+                            for key in sorted(self.region_mask_keys):
                                 if key in mask_row.files and np.asarray(mask_row[key]).shape != (self.token_count,):
                                     bad.append(
                                         f'{mask_path}: {key} shape={np.asarray(mask_row[key]).shape}, '
@@ -306,21 +444,34 @@ class PairedWarmupDataset(Dataset):
         epoch, index = divmod(int(index), len(self.ids))
         sid = self.ids[index]
         with np.load(self.sample_path(sid), mmap_mode='r') as row:
-            cached = {key: np.asarray(row[key]) for key in SAMPLE_CACHE_KEYS}
+            cached = {key: np.asarray(row[key]) for key in self.sample_cache_keys}
         with np.load(self.prompt_cache, mmap_mode='r') as text:
             prompt_embeds = np.asarray(text['prompt_embeds'])
             pooled_prompt_embeds = np.asarray(text['pooled_prompt_embeds'])
         head_pose = torch.from_numpy(cached['head_pose']).float()
         dropped = False
-        if self.head_pose_dropout > 0.0 and torch.rand(()) < self.head_pose_dropout:
+        use_synthetic_head = False
+        if self.head_control_enabled:
+            control_seed = (
+                self.base_seed * 1_000_003
+                + epoch * 97_409
+                + index * 65_537
+                + 31_337
+            ) & ((1 << 63) - 1)
+            control_rng = np.random.default_rng(np.uint64(control_seed))
+            dropped = self.head_pose_dropout > 0.0 and control_rng.random() < self.head_pose_dropout
+            use_synthetic_head = control_rng.random() < self.synthetic_head_probability
+        elif self.head_pose_dropout > 0.0:
+            dropped = bool(torch.rand(()) < self.head_pose_dropout)
+        if dropped:
             head_pose = torch.zeros_like(head_pose)
-            dropped = True
+        pose_key = 'pose_synth_latents' if use_synthetic_head else 'pose_latents'
         item = {
             'index': torch.tensor(index, dtype=torch.long),
             'sample_epoch': torch.tensor(epoch, dtype=torch.long),
             'sample_id': sid,
             'target_latents': torch.from_numpy(cached['target_latents']).float(),
-            'pose_latents': torch.from_numpy(cached['pose_latents']).float(),
+            'pose_latents': torch.from_numpy(cached[pose_key]).float(),
             'prompt_embeds': torch.from_numpy(prompt_embeds).float(),
             'pooled_prompt_embeds': torch.from_numpy(pooled_prompt_embeds).float(),
             'pulid_id_embed': torch.from_numpy(cached['pulid_id_embed']).float(),
@@ -328,7 +479,40 @@ class PairedWarmupDataset(Dataset):
             'garment': torch.from_numpy(cached['garment_grid']).float(),
             'head_pose': head_pose,
             'head_pose_is_null': torch.tensor(dropped or bool(torch.all(head_pose == 0)), dtype=torch.float32),
+            'head_control_is_synthetic': torch.tensor(use_synthetic_head, dtype=torch.float32),
         }
+        if self.garment_reference_enabled:
+            item['garment_ref_latents'] = torch.from_numpy(cached['garment_ref_latents']).float()
+        if self.hair_reference_enabled:
+            item['hair_ref_latents'] = torch.from_numpy(
+                cached['hair_ref_latents']
+            ).float()
+            item['hair_ref_empty'] = torch.tensor(
+                int(np.asarray(cached['hair_ref_empty']).reshape(-1)[0]),
+                dtype=torch.float32,
+            )
+        if self.hair_token_assets_enabled:
+            item.update({
+                'hair_ref_tokens': torch.from_numpy(cached['hair_ref_tokens']).float(),
+                'hair_ref_positions': torch.from_numpy(cached['hair_ref_positions']).float(),
+                'hair_ref_mask': torch.from_numpy(cached['hair_ref_mask']).float(),
+            })
+        if self.semantic_hair_enabled:
+            item.update({
+                'hair_semantic_tokens': torch.from_numpy(cached['hair_semantic_tokens']).float(),
+                'hair_semantic_mask': torch.from_numpy(cached['hair_semantic_mask']).float(),
+            })
+        mask_values: dict[str, np.ndarray] = {}
+        if self.region_mask_keys:
+            with np.load(self.region_masks_z_dir / f'{sid}.npz', mmap_mode='r') as masks:
+                mask_values = {
+                    key: np.asarray(masks[key])
+                    for key in self.region_mask_keys
+                }
+            item.update({
+                key: torch.from_numpy(value).float()
+                for key, value in mask_values.items()
+            })
         if self.differential_enabled:
             assert self.identity_bank is not None
             sample_seed = (
@@ -350,11 +534,33 @@ class PairedWarmupDataset(Dataset):
             with np.load(self.sample_path(j_id), mmap_mode='r') as j_row:
                 j_pulid = np.asarray(j_row['pulid_id_embed'])
                 j_appearance = np.asarray(j_row['appearance'])
+                j_hair = {
+                    key: np.asarray(j_row[key])
+                    for key in SPATIAL_HAIR_KEYS
+                } if self.hair_token_assets_enabled else {}
+                j_semantic_hair = {
+                    key: np.asarray(j_row[key])
+                    for key in SPATIAL_HAIR_SEMANTIC_KEYS
+                } if self.semantic_hair_enabled else {}
+                j_hair_reference = {
+                    key: np.asarray(j_row[key])
+                    for key in SPATIAL_HAIR_REFERENCE_KEYS
+                } if self.hair_reference_enabled else {}
             with np.load(self.sample_path(k_id), mmap_mode='r') as k_row:
                 k_pulid = np.asarray(k_row['pulid_id_embed'])
                 k_appearance = np.asarray(k_row['appearance'])
-            with np.load(self.region_masks_z_dir / f'{sid}.npz', mmap_mode='r') as masks:
-                mask_values = {key: np.asarray(masks[key]) for key in DIFFERENTIAL_MASK_KEYS}
+                k_hair = {
+                    key: np.asarray(k_row[key])
+                    for key in SPATIAL_HAIR_KEYS
+                } if self.hair_token_assets_enabled else {}
+                k_semantic_hair = {
+                    key: np.asarray(k_row[key])
+                    for key in SPATIAL_HAIR_SEMANTIC_KEYS
+                } if self.semantic_hair_enabled else {}
+                k_hair_reference = {
+                    key: np.asarray(k_row[key])
+                    for key in SPATIAL_HAIR_REFERENCE_KEYS
+                } if self.hair_reference_enabled else {}
             item.update({
                 'cf_j_id': j_id,
                 'cf_k_id': k_id,
@@ -368,10 +574,44 @@ class PairedWarmupDataset(Dataset):
                 'cf_sampling_relaxation': torch.tensor(int(pair['relaxation']), dtype=torch.int64),
                 'cf_sampling_candidate_count': torch.tensor(int(pair['candidate_count']), dtype=torch.int64),
                 'cf_sampling_pool_count': torch.tensor(int(pair['pool_count']), dtype=torch.int64),
-                'cloth_safe_z': torch.from_numpy(mask_values['cloth_safe_z']).float(),
-                'body_bg_z': torch.from_numpy(mask_values['body_bg_z']).float(),
-                'face_z': torch.from_numpy(mask_values['face_z']).float(),
             })
+            if self.hair_token_assets_enabled:
+                item.update({
+                    'cf_j_hair_ref_tokens': torch.from_numpy(j_hair['hair_ref_tokens']).float(),
+                    'cf_j_hair_ref_positions': torch.from_numpy(j_hair['hair_ref_positions']).float(),
+                    'cf_j_hair_ref_mask': torch.from_numpy(j_hair['hair_ref_mask']).float(),
+                    'cf_k_hair_ref_tokens': torch.from_numpy(k_hair['hair_ref_tokens']).float(),
+                    'cf_k_hair_ref_positions': torch.from_numpy(k_hair['hair_ref_positions']).float(),
+                    'cf_k_hair_ref_mask': torch.from_numpy(k_hair['hair_ref_mask']).float(),
+                })
+            if self.semantic_hair_enabled:
+                item.update({
+                    'cf_j_hair_semantic_tokens': torch.from_numpy(
+                        j_semantic_hair['hair_semantic_tokens']
+                    ).float(),
+                    'cf_j_hair_semantic_mask': torch.from_numpy(j_semantic_hair['hair_semantic_mask']).float(),
+                    'cf_k_hair_semantic_tokens': torch.from_numpy(
+                        k_semantic_hair['hair_semantic_tokens']
+                    ).float(),
+                    'cf_k_hair_semantic_mask': torch.from_numpy(k_semantic_hair['hair_semantic_mask']).float(),
+                })
+            if self.hair_reference_enabled:
+                item.update({
+                    'cf_j_hair_ref_latents': torch.from_numpy(
+                        j_hair_reference['hair_ref_latents']
+                    ).float(),
+                    'cf_k_hair_ref_latents': torch.from_numpy(
+                        k_hair_reference['hair_ref_latents']
+                    ).float(),
+                    'cf_j_hair_ref_empty': torch.tensor(
+                        int(np.asarray(j_hair_reference['hair_ref_empty']).reshape(-1)[0]),
+                        dtype=torch.float32,
+                    ),
+                    'cf_k_hair_ref_empty': torch.tensor(
+                        int(np.asarray(k_hair_reference['hair_ref_empty']).reshape(-1)[0]),
+                        dtype=torch.float32,
+                    ),
+                })
         return item
 
 

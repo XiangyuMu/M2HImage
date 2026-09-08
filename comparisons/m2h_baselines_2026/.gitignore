@@ -1,0 +1,11 @@
+prepared*/
+layouts*/
+models/
+runs/
+checkpoints/
+outputs/
+reports/generated/
+*.pyc
+__pycache__/
+.pytest_cache/
+

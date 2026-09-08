@@ -32,6 +32,7 @@ dependencies = [
   "scikit-image",
   "scipy",
   "torch",
+  "torch-fidelity==0.3.0",
   "torchvision",
   "tqdm",
   "transformers",
@@ -43,7 +44,7 @@ dependencies = [
 dev = ["pytest", "ruff"]
 
 [tool.setuptools]
-packages = ["metrics"]
+packages = ["metrics", "metrics_v2"]
 py-modules = [
   "build_cache",
   "build_identity_bank",
@@ -56,10 +57,25 @@ py-modules = [
   "eval_b2_make_vis",
   "eval_a4_gate_report",
   "eval_gate_report",
+  "eval_interp_reports",
+  "eval_metrics_v2",
   "eval_protected_gate",
   "eval_watcher",
   "analyze_id_velocity",
+  "interp_common",
+  "interp_identity",
+  "interp_weights",
+  "human_eval_build",
+  "human_eval_score",
+  "make_qual_panels",
   "pulid_flux",
+  "hair_supervision",
+  "manual_review_gate",
+  "spatial_conditions",
+  "synth_head_keypoints",
+  "tile_multicontrol_probe",
+  "qual_eval_common",
+  "run_interpolation",
   "sampling_protected",
   "speed_bench",
   "diagnose_a2",

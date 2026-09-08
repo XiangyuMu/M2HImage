@@ -1,0 +1,28 @@
+extends: /data/muxiangyu/programs/M2HImage/configs/metrics_v2.yaml
+
+# Server-specific evaluation wiring for muxiangyu@10.249.190.76. The data and
+# generated run paths are overlaid by m2h_baselines.metrics_config at runtime.
+metrics:
+  heldout_id:
+    repo: /data/muxiangyu/cache/m2h_baselines_2026/models/uniface
+    checkpoint: /data/muxiangyu/cache/m2h_baselines_2026/models/uniface/adaface_ir_101.onnx
+    cache_dir: /data/muxiangyu/cache/m2h_baselines_2026/models/uniface
+    detector_model_root: /data/muxiangyu/cache/m2h_baselines_2026/models/insightface
+    recognizer_providers: [CPUExecutionProvider]
+    detector_providers: [CPUExecutionProvider]
+
+metrics_v2:
+  parsing:
+    model_dir: /data/muxiangyu/programs/M2HImage/models/hf/fashn-ai/fashn-human-parser
+    # 0.1% is 262 pixels at 512x512. The previous 1% threshold rejected
+    # legitimate hair on small, full-body subjects, including a source mask.
+    min_hair_area_fraction: 0.001
+  dino:
+    repo_root: /data/muxiangyu/pythonPrograms/GSVTON
+    checkpoint: /data/muxiangyu/pythonPrograms/GSVTON/pretrained/dinov2_vitb14_pretrain.pth
+  pose:
+    helper_python: /data/muxiangyu/envs/m2h_baselines_2026/mcld/bin/python
+    repo_root: /data/muxiangyu/programs/M2HDataset/third_party/DWPose/ControlNet-v1-1-nightly/annotator
+    detector_checkpoint: /data/muxiangyu/programs/M2HDataset/models/DWPose/yolox_l.onnx
+    pose_checkpoint: /data/muxiangyu/programs/M2HDataset/models/DWPose/dw-ll_ucoco_384.onnx
+    provider: CPUExecutionProvider

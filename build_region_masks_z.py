@@ -19,6 +19,7 @@ SOURCE_KEYS = {
     'body_bg_z': 'body_bg',
     'face_z': 'id_strong',
 }
+HAIR_OUTPUT_KEY = 'hair_z'
 
 
 def pool_token_mask(mask: np.ndarray, width: int, height: int) -> tuple[np.ndarray, bool]:
@@ -50,6 +51,7 @@ def debug_panel(root: Path, sample_id: str, payload: dict[str, np.ndarray], widt
     panels = [
         ('image', image),
         ('cloth_safe_z', overlay_mask(image, payload['cloth_safe_z'], width, height, (255, 40, 40))),
+        ('hair_z', overlay_mask(image, payload['hair_z'], width, height, (255, 80, 220))),
         ('body_bg_z', overlay_mask(image, payload['body_bg_z'], width, height, (40, 180, 255))),
         ('face_z', overlay_mask(image, payload['face_z'], width, height, (40, 255, 100))),
     ]
@@ -69,27 +71,42 @@ def build_one(
     output_dir: str,
     width: int,
     height: int,
+    hair_label: int,
     overwrite: bool,
     write_debug: bool,
 ) -> dict[str, Any]:
     root_path = Path(root)
     output_path = Path(output_dir) / f'{sample_id}.npz'
-    if output_path.exists() and not overwrite:
-        return {'id': sample_id, 'status': 'existing', 'resized': False}
+    payload: dict[str, np.ndarray] = {}
+    if output_path.exists():
+        with np.load(output_path, allow_pickle=False) as existing:
+            payload = {key: np.asarray(existing[key]) for key in existing.files}
+        required = set(SOURCE_KEYS) | {HAIR_OUTPUT_KEY}
+        if not overwrite and required.issubset(payload):
+            return {'id': sample_id, 'status': 'existing', 'resized': False}
     source_path = root_path / 'derived/region_masks' / f'{sample_id}.npz'
     if not source_path.exists():
         raise FileNotFoundError(f'missing source region mask: {source_path}')
-    source = np.load(source_path)
-    missing = [key for key in SOURCE_KEYS.values() if key not in source.files]
-    if missing:
-        raise KeyError(f'{source_path} missing keys: {missing}')
-    payload: dict[str, np.ndarray] = {}
+    with np.load(source_path, allow_pickle=False) as source:
+        missing = [key for key in SOURCE_KEYS.values() if key not in source.files]
+        if missing:
+            raise KeyError(f'{source_path} missing keys: {missing}')
+        source_masks = {key: np.asarray(source[key]) for key in SOURCE_KEYS.values()}
     resized_any = False
     for output_key, source_key in SOURCE_KEYS.items():
-        payload[output_key], resized = pool_token_mask(np.asarray(source[source_key]), width, height)
+        if output_key in payload and not overwrite:
+            continue
+        payload[output_key], resized = pool_token_mask(source_masks[source_key], width, height)
+        resized_any = resized_any or resized
+    if HAIR_OUTPUT_KEY not in payload or overwrite:
+        parsing_path = find_one(root_path / 'human_parsing/fashn/masks/human', sample_id)
+        parsing = np.asarray(Image.open(parsing_path).convert('L'), dtype=np.uint8)
+        hair = (parsing == int(hair_label)).astype(np.uint8) * 255
+        payload[HAIR_OUTPUT_KEY], resized = pool_token_mask(hair, width, height)
         resized_any = resized_any or resized
     expected = (height // 16) * (width // 16)
-    for key, value in payload.items():
+    for key in (*SOURCE_KEYS, HAIR_OUTPUT_KEY):
+        value = payload[key]
         if value.shape != (expected,):
             raise RuntimeError(f'{sample_id} {key} shape={value.shape}, expected {(expected,)}')
         if not np.isfinite(value).all() or value.min(initial=0.0) < 0.0 or value.max(initial=1.0) > 1.0:
@@ -119,6 +136,11 @@ def main() -> None:
     cfg = load_yaml(args.config)
     root = Path(cfg['data']['root'])
     width, height = get_resolution(cfg['data']['resolution'])
+    hair_label = int(
+        cfg.get('training', {}).get('hair_loss', {}).get(
+            'hair_label', cfg.get('cache', {}).get('hair_label', 2)
+        )
+    )
     output_dir = root / cfg['data'].get('region_masks_z_dir', 'derived/region_masks_z')
     output_dir.mkdir(parents=True, exist_ok=True)
     ids: list[str] = []
@@ -142,6 +164,7 @@ def main() -> None:
                 str(output_dir),
                 width,
                 height,
+                hair_label,
                 args.overwrite,
                 sample_id in debug_ids,
             ): sample_id
@@ -162,7 +185,12 @@ def main() -> None:
         'output': str(output_dir),
         'resolution': {'width': width, 'height': height},
         'token_grid': {'height': height // 16, 'width': width // 16, 'tokens': (height // 16) * (width // 16)},
-        'mapping': SOURCE_KEYS,
+        'mapping': {
+            **SOURCE_KEYS,
+            HAIR_OUTPUT_KEY: (
+                f'human_parsing/fashn/masks/human/{{id}} label={hair_label}'
+            ),
+        },
         'dtype': 'float16',
         'pooling': 'non-overlapping 16x16 image-pixel average pooling in packed-token row-major order',
         'requested': len(ids),

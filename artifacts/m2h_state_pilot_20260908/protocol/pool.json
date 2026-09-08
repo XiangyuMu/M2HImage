@@ -1,0 +1,1555 @@
+{
+  "schema": 1,
+  "seed": 20260908,
+  "inputs": {
+    "/data/muxiangyu/datasets/M2HImage/M2H_Final_v2/metadata/manifest.csv": "64267d7b51870541bead4c60e1c0ddc743e4df9dc2536af6496f465f0afc44d1",
+    "/data/muxiangyu/datasets/M2HImage/M2H_Final_v2/splits/train.txt": "38d1d8b58bf279aeed38a66525f422b5540eff2deca3833603cac2532d5e1615",
+    "/data/muxiangyu/datasets/M2HImage/M2H_Final_v2/derived/identity_bank_v2.npz": "1772598863bca76b2d743cca79fcb862155d949cc848fd330f01ae83bc0e4e9d",
+    "/data/muxiangyu/pythonPrograms/M2HImage/artifacts/m2h_ab_objective_v1/data_protocol_v2/dev128_pairs.json": "9cc9bc517e65486c2794cde0ef1d002d8db0f3f186bc2adc0c8fcdc5843929be",
+    "/data/muxiangyu/pythonPrograms/M2HImage/artifacts/m2h_ab_objective_v1/full_duplicates/exact_groups.json": "a5dfe683a34132d0d5f07b68e5aaea118ef668356440f3e625708e81d6848ffa"
+  },
+  "sampling": "32 random train reference groups; two strict-compatible references per source, fixed random without replacement",
+  "source_group_rule": "namespace + multiimages_x2 parent; other keys opaque",
+  "excluded_ids": 4183,
+  "excluded_groups": 4083,
+  "eligible_ids": 34284,
+  "limitation": "No semantic identity-disjoint certification; no new manual annotations; historical A2/A4 not clean retrained.",
+  "rows": [
+    {
+      "mid": "13755",
+      "jid": "17207",
+      "kid": "17157",
+      "source_group": "zalando_M2H:multiimages_x2__06803"
+    },
+    {
+      "mid": "43742",
+      "jid": "08239",
+      "kid": "40970",
+      "source_group": "VITON-HD_M2H:train__08815_00"
+    },
+    {
+      "mid": "28631",
+      "jid": "16437",
+      "kid": "00835",
+      "source_group": "zalando_M2H:singleimage_x2__04023"
+    },
+    {
+      "mid": "19463",
+      "jid": "45471",
+      "kid": "40778",
+      "source_group": "zalando_M2H:multiimages_x2__09640"
+    },
+    {
+      "mid": "13244",
+      "jid": "38551",
+      "kid": "32025",
+      "source_group": "zalando_M2H:multiimages_x2__06550"
+    },
+    {
+      "mid": "20861",
+      "jid": "38551",
+      "kid": "06913",
+      "source_group": "zalando_M2H:multiimages_x2__10335"
+    },
+    {
+      "mid": "16280",
+      "jid": "28212",
+      "kid": "17201",
+      "source_group": "zalando_M2H:multiimages_x2__08058"
+    },
+    {
+      "mid": "04497",
+      "jid": "22818",
+      "kid": "15587",
+      "source_group": "zalando_M2H:multiimages_x2__02218"
+    },
+    {
+      "mid": "35642",
+      "jid": "11142",
+      "kid": "32025",
+      "source_group": "VITON-HD_M2H:test__06442_00"
+    },
+    {
+      "mid": "33542",
+      "jid": "23520",
+      "kid": "45471",
+      "source_group": "zalando_M2H:singleimage_x2__08957"
+    },
+    {
+      "mid": "22838",
+      "jid": "43336",
+      "kid": "40778",
+      "source_group": "zalando_M2H:multiimages_x2__11315"
+    },
+    {
+      "mid": "05763",
+      "jid": "16437",
+      "kid": "06913",
+      "source_group": "zalando_M2H:multiimages_x2__02844"
+    },
+    {
+      "mid": "20056",
+      "jid": "28212",
+      "kid": "17087",
+      "source_group": "zalando_M2H:multiimages_x2__09933"
+    },
+    {
+      "mid": "02574",
+      "jid": "08239",
+      "kid": "40970",
+      "source_group": "zalando_M2H:multiimages_x2__01265"
+    },
+    {
+      "mid": "42942",
+      "jid": "32025",
+      "kid": "45471",
+      "source_group": "VITON-HD_M2H:train__07788_00"
+    },
+    {
+      "mid": "44816",
+      "jid": "16437",
+      "kid": "00835",
+      "source_group": "VITON-HD_M2H:train__10172_00"
+    },
+    {
+      "mid": "16527",
+      "jid": "45471",
+      "kid": "46677",
+      "source_group": "zalando_M2H:multiimages_x2__08181"
+    },
+    {
+      "mid": "04711",
+      "jid": "17383",
+      "kid": "17201",
+      "source_group": "zalando_M2H:multiimages_x2__02324"
+    },
+    {
+      "mid": "01404",
+      "jid": "47776",
+      "kid": "46677",
+      "source_group": "zalando_M2H:multiimages_x2__00689"
+    },
+    {
+      "mid": "34454",
+      "jid": "01695",
+      "kid": "23912",
+      "source_group": "zalando_M2H:singleimage_x2__09871"
+    },
+    {
+      "mid": "21164",
+      "jid": "23520",
+      "kid": "06913",
+      "source_group": "zalando_M2H:multiimages_x2__10485"
+    },
+    {
+      "mid": "18509",
+      "jid": "23912",
+      "kid": "17087",
+      "source_group": "zalando_M2H:multiimages_x2__09169"
+    },
+    {
+      "mid": "05170",
+      "jid": "08239",
+      "kid": "16437",
+      "source_group": "zalando_M2H:multiimages_x2__02553"
+    },
+    {
+      "mid": "26492",
+      "jid": "28212",
+      "kid": "17087",
+      "source_group": "zalando_M2H:singleimage_x2__01883"
+    },
+    {
+      "mid": "00218",
+      "jid": "11142",
+      "kid": "32025",
+      "source_group": "zalando_M2H:multiimages_x2__00108"
+    },
+    {
+      "mid": "26045",
+      "jid": "28212",
+      "kid": "17383",
+      "source_group": "zalando_M2H:singleimage_x2__01436"
+    },
+    {
+      "mid": "27824",
+      "jid": "01695",
+      "kid": "15587",
+      "source_group": "zalando_M2H:singleimage_x2__03216"
+    },
+    {
+      "mid": "17140",
+      "jid": "25774",
+      "kid": "17383",
+      "source_group": "zalando_M2H:multiimages_x2__08488"
+    },
+    {
+      "mid": "16798",
+      "jid": "11142",
+      "kid": "16437",
+      "source_group": "zalando_M2H:multiimages_x2__08318"
+    },
+    {
+      "mid": "19231",
+      "jid": "00835",
+      "kid": "05507",
+      "source_group": "zalando_M2H:multiimages_x2__09527"
+    },
+    {
+      "mid": "46192",
+      "jid": "08239",
+      "kid": "11142",
+      "source_group": "VITON-HD_M2H:train__11914_00"
+    },
+    {
+      "mid": "30382",
+      "jid": "40970",
+      "kid": "46677",
+      "source_group": "zalando_M2H:singleimage_x2__05780"
+    },
+    {
+      "mid": "24542",
+      "jid": "08239",
+      "kid": "40970",
+      "source_group": "zalando_M2H:multiimages_x2__12158"
+    },
+    {
+      "mid": "08385",
+      "jid": "38551",
+      "kid": "06913",
+      "source_group": "zalando_M2H:multiimages_x2__04142"
+    },
+    {
+      "mid": "11850",
+      "jid": "47776",
+      "kid": "45471",
+      "source_group": "zalando_M2H:multiimages_x2__05859"
+    },
+    {
+      "mid": "07113",
+      "jid": "23622",
+      "kid": "32025",
+      "source_group": "zalando_M2H:multiimages_x2__03509"
+    },
+    {
+      "mid": "26173",
+      "jid": "00835",
+      "kid": "08239",
+      "source_group": "zalando_M2H:singleimage_x2__01564"
+    },
+    {
+      "mid": "28105",
+      "jid": "46677",
+      "kid": "47776",
+      "source_group": "zalando_M2H:singleimage_x2__03497"
+    },
+    {
+      "mid": "02068",
+      "jid": "38551",
+      "kid": "23622",
+      "source_group": "zalando_M2H:multiimages_x2__01018"
+    },
+    {
+      "mid": "16288",
+      "jid": "17207",
+      "kid": "17383",
+      "source_group": "zalando_M2H:multiimages_x2__08062"
+    },
+    {
+      "mid": "05018",
+      "jid": "05513",
+      "kid": "15587",
+      "source_group": "zalando_M2H:multiimages_x2__02477"
+    },
+    {
+      "mid": "36898",
+      "jid": "05507",
+      "kid": "23520",
+      "source_group": "VITON-HD_M2H:train__00170_00"
+    },
+    {
+      "mid": "38013",
+      "jid": "46677",
+      "kid": "45471",
+      "source_group": "VITON-HD_M2H:train__01580_00"
+    },
+    {
+      "mid": "12097",
+      "jid": "45471",
+      "kid": "08239",
+      "source_group": "zalando_M2H:multiimages_x2__05982"
+    },
+    {
+      "mid": "18851",
+      "jid": "23520",
+      "kid": "40970",
+      "source_group": "zalando_M2H:multiimages_x2__09340"
+    },
+    {
+      "mid": "05479",
+      "jid": "40970",
+      "kid": "32025",
+      "source_group": "zalando_M2H:multiimages_x2__02707"
+    },
+    {
+      "mid": "41735",
+      "jid": "00835",
+      "kid": "45471",
+      "source_group": "VITON-HD_M2H:train__06257_00"
+    },
+    {
+      "mid": "13304",
+      "jid": "28212",
+      "kid": "01695",
+      "source_group": "zalando_M2H:multiimages_x2__06580"
+    },
+    {
+      "mid": "05548",
+      "jid": "11142",
+      "kid": "40970",
+      "source_group": "zalando_M2H:multiimages_x2__02741"
+    },
+    {
+      "mid": "08953",
+      "jid": "31055",
+      "kid": "01446",
+      "source_group": "zalando_M2H:multiimages_x2__04420"
+    },
+    {
+      "mid": "17085",
+      "jid": "33324",
+      "kid": "17383",
+      "source_group": "zalando_M2H:multiimages_x2__08460"
+    },
+    {
+      "mid": "45440",
+      "jid": "38551",
+      "kid": "23520",
+      "source_group": "VITON-HD_M2H:train__10979_00"
+    },
+    {
+      "mid": "40508",
+      "jid": "23622",
+      "kid": "45471",
+      "source_group": "VITON-HD_M2H:train__04724_00"
+    },
+    {
+      "mid": "40457",
+      "jid": "47776",
+      "kid": "05507",
+      "source_group": "VITON-HD_M2H:train__04658_00"
+    },
+    {
+      "mid": "11281",
+      "jid": "33324",
+      "kid": "28212",
+      "source_group": "zalando_M2H:multiimages_x2__05577"
+    },
+    {
+      "mid": "32943",
+      "jid": "25774",
+      "kid": "22818",
+      "source_group": "zalando_M2H:singleimage_x2__08353"
+    },
+    {
+      "mid": "11334",
+      "jid": "00835",
+      "kid": "45471",
+      "source_group": "zalando_M2H:multiimages_x2__05604"
+    },
+    {
+      "mid": "10424",
+      "jid": "33324",
+      "kid": "17207",
+      "source_group": "zalando_M2H:multiimages_x2__05151"
+    },
+    {
+      "mid": "31500",
+      "jid": "17207",
+      "kid": "17383",
+      "source_group": "zalando_M2H:singleimage_x2__06904"
+    },
+    {
+      "mid": "01844",
+      "jid": "16437",
+      "kid": "45471",
+      "source_group": "zalando_M2H:multiimages_x2__00907"
+    },
+    {
+      "mid": "23993",
+      "jid": "32025",
+      "kid": "40970",
+      "source_group": "zalando_M2H:multiimages_x2__11886"
+    },
+    {
+      "mid": "20818",
+      "jid": "46677",
+      "kid": "08239",
+      "source_group": "zalando_M2H:multiimages_x2__10314"
+    },
+    {
+      "mid": "06906",
+      "jid": "05507",
+      "kid": "45471",
+      "source_group": "zalando_M2H:multiimages_x2__03408"
+    },
+    {
+      "mid": "43221",
+      "jid": "23520",
+      "kid": "11142",
+      "source_group": "VITON-HD_M2H:train__08144_00"
+    },
+    {
+      "mid": "39132",
+      "jid": "40778",
+      "kid": "47776",
+      "source_group": "VITON-HD_M2H:train__03031_00"
+    },
+    {
+      "mid": "43329",
+      "jid": "08239",
+      "kid": "47776",
+      "source_group": "VITON-HD_M2H:train__08289_00"
+    },
+    {
+      "mid": "17062",
+      "jid": "17201",
+      "kid": "23912",
+      "source_group": "zalando_M2H:multiimages_x2__08449"
+    },
+    {
+      "mid": "02642",
+      "jid": "46677",
+      "kid": "00835",
+      "source_group": "zalando_M2H:multiimages_x2__01299"
+    },
+    {
+      "mid": "17930",
+      "jid": "22818",
+      "kid": "25774",
+      "source_group": "zalando_M2H:multiimages_x2__08882"
+    },
+    {
+      "mid": "09250",
+      "jid": "47776",
+      "kid": "32025",
+      "source_group": "zalando_M2H:multiimages_x2__04567"
+    },
+    {
+      "mid": "26661",
+      "jid": "33324",
+      "kid": "17157",
+      "source_group": "zalando_M2H:singleimage_x2__02052"
+    },
+    {
+      "mid": "12162",
+      "jid": "47776",
+      "kid": "40778",
+      "source_group": "zalando_M2H:multiimages_x2__06014"
+    },
+    {
+      "mid": "18291",
+      "jid": "17383",
+      "kid": "01695",
+      "source_group": "zalando_M2H:multiimages_x2__09061"
+    },
+    {
+      "mid": "46896",
+      "jid": "46677",
+      "kid": "32025",
+      "source_group": "VITON-HD_M2H:train__12804_00"
+    },
+    {
+      "mid": "45390",
+      "jid": "40970",
+      "kid": "32025",
+      "source_group": "VITON-HD_M2H:train__10916_00"
+    },
+    {
+      "mid": "31846",
+      "jid": "01695",
+      "kid": "28212",
+      "source_group": "zalando_M2H:singleimage_x2__07250"
+    },
+    {
+      "mid": "23222",
+      "jid": "11142",
+      "kid": "08239",
+      "source_group": "zalando_M2H:multiimages_x2__11506"
+    },
+    {
+      "mid": "00456",
+      "jid": "40970",
+      "kid": "46677",
+      "source_group": "zalando_M2H:multiimages_x2__00226"
+    },
+    {
+      "mid": "23348",
+      "jid": "08239",
+      "kid": "40778",
+      "source_group": "zalando_M2H:multiimages_x2__11568"
+    },
+    {
+      "mid": "18994",
+      "jid": "17383",
+      "kid": "28212",
+      "source_group": "zalando_M2H:multiimages_x2__09409"
+    },
+    {
+      "mid": "21533",
+      "jid": "05507",
+      "kid": "08239",
+      "source_group": "zalando_M2H:multiimages_x2__10669"
+    },
+    {
+      "mid": "45580",
+      "jid": "23622",
+      "kid": "43336",
+      "source_group": "VITON-HD_M2H:train__11152_00"
+    },
+    {
+      "mid": "31719",
+      "jid": "23912",
+      "kid": "01446",
+      "source_group": "zalando_M2H:singleimage_x2__07123"
+    },
+    {
+      "mid": "06641",
+      "jid": "47776",
+      "kid": "11142",
+      "source_group": "zalando_M2H:multiimages_x2__03277"
+    },
+    {
+      "mid": "27481",
+      "jid": "08239",
+      "kid": "47776",
+      "source_group": "zalando_M2H:singleimage_x2__02872"
+    },
+    {
+      "mid": "32504",
+      "jid": "46677",
+      "kid": "32025",
+      "source_group": "zalando_M2H:singleimage_x2__07910"
+    },
+    {
+      "mid": "27631",
+      "jid": "40778",
+      "kid": "46677",
+      "source_group": "zalando_M2H:singleimage_x2__03022"
+    },
+    {
+      "mid": "09811",
+      "jid": "01695",
+      "kid": "17201",
+      "source_group": "zalando_M2H:multiimages_x2__04847"
+    },
+    {
+      "mid": "05827",
+      "jid": "47776",
+      "kid": "45471",
+      "source_group": "zalando_M2H:multiimages_x2__02875"
+    },
+    {
+      "mid": "14600",
+      "jid": "11142",
+      "kid": "23520",
+      "source_group": "zalando_M2H:multiimages_x2__07225"
+    },
+    {
+      "mid": "42483",
+      "jid": "08239",
+      "kid": "45471",
+      "source_group": "VITON-HD_M2H:train__07201_00"
+    },
+    {
+      "mid": "35300",
+      "jid": "32025",
+      "kid": "40970",
+      "source_group": "VITON-HD_M2H:test__03751_00"
+    },
+    {
+      "mid": "32210",
+      "jid": "22818",
+      "kid": "08286",
+      "source_group": "zalando_M2H:singleimage_x2__07615"
+    },
+    {
+      "mid": "06952",
+      "jid": "47776",
+      "kid": "43336",
+      "source_group": "zalando_M2H:multiimages_x2__03430"
+    },
+    {
+      "mid": "22240",
+      "jid": "47776",
+      "kid": "45471",
+      "source_group": "zalando_M2H:multiimages_x2__11019"
+    },
+    {
+      "mid": "15433",
+      "jid": "40970",
+      "kid": "23622",
+      "source_group": "zalando_M2H:multiimages_x2__07639"
+    },
+    {
+      "mid": "30543",
+      "jid": "23622",
+      "kid": "43336",
+      "source_group": "zalando_M2H:singleimage_x2__05942"
+    },
+    {
+      "mid": "06576",
+      "jid": "40970",
+      "kid": "45471",
+      "source_group": "zalando_M2H:multiimages_x2__03245"
+    },
+    {
+      "mid": "18204",
+      "jid": "23520",
+      "kid": "11142",
+      "source_group": "zalando_M2H:multiimages_x2__09018"
+    },
+    {
+      "mid": "01191",
+      "jid": "28212",
+      "kid": "15587",
+      "source_group": "zalando_M2H:multiimages_x2__00585"
+    },
+    {
+      "mid": "01155",
+      "jid": "31055",
+      "kid": "01446",
+      "source_group": "zalando_M2H:multiimages_x2__00567"
+    },
+    {
+      "mid": "21602",
+      "jid": "32025",
+      "kid": "43336",
+      "source_group": "zalando_M2H:multiimages_x2__10703"
+    },
+    {
+      "mid": "12628",
+      "jid": "11142",
+      "kid": "32025",
+      "source_group": "zalando_M2H:multiimages_x2__06245"
+    },
+    {
+      "mid": "23155",
+      "jid": "46677",
+      "kid": "11142",
+      "source_group": "zalando_M2H:multiimages_x2__11473"
+    },
+    {
+      "mid": "10340",
+      "jid": "32025",
+      "kid": "45471",
+      "source_group": "zalando_M2H:multiimages_x2__05109"
+    },
+    {
+      "mid": "11244",
+      "jid": "32025",
+      "kid": "47776",
+      "source_group": "zalando_M2H:multiimages_x2__05559"
+    },
+    {
+      "mid": "26276",
+      "jid": "23912",
+      "kid": "33324",
+      "source_group": "zalando_M2H:singleimage_x2__01667"
+    },
+    {
+      "mid": "08520",
+      "jid": "05507",
+      "kid": "23622",
+      "source_group": "zalando_M2H:multiimages_x2__04207"
+    },
+    {
+      "mid": "18392",
+      "jid": "01446",
+      "kid": "17087",
+      "source_group": "zalando_M2H:multiimages_x2__09111"
+    },
+    {
+      "mid": "47433",
+      "jid": "23520",
+      "kid": "47776",
+      "source_group": "VITON-HD_M2H:train__13474_00"
+    },
+    {
+      "mid": "26975",
+      "jid": "28212",
+      "kid": "17383",
+      "source_group": "zalando_M2H:singleimage_x2__02366"
+    },
+    {
+      "mid": "35658",
+      "jid": "47776",
+      "kid": "40778",
+      "source_group": "VITON-HD_M2H:test__06543_00"
+    },
+    {
+      "mid": "44308",
+      "jid": "43336",
+      "kid": "45471",
+      "source_group": "VITON-HD_M2H:train__09535_00"
+    },
+    {
+      "mid": "25038",
+      "jid": "05507",
+      "kid": "00835",
+      "source_group": "zalando_M2H:singleimage_x2__00429"
+    },
+    {
+      "mid": "03514",
+      "jid": "28212",
+      "kid": "33324",
+      "source_group": "zalando_M2H:multiimages_x2__01729"
+    },
+    {
+      "mid": "42879",
+      "jid": "11142",
+      "kid": "05507",
+      "source_group": "VITON-HD_M2H:train__07704_00"
+    },
+    {
+      "mid": "31820",
+      "jid": "17201",
+      "kid": "23912",
+      "source_group": "zalando_M2H:singleimage_x2__07224"
+    },
+    {
+      "mid": "30958",
+      "jid": "32025",
+      "kid": "05507",
+      "source_group": "zalando_M2H:singleimage_x2__06360"
+    },
+    {
+      "mid": "29571",
+      "jid": "11142",
+      "kid": "05507",
+      "source_group": "zalando_M2H:singleimage_x2__04964"
+    },
+    {
+      "mid": "33882",
+      "jid": "40778",
+      "kid": "46677",
+      "source_group": "zalando_M2H:singleimage_x2__09297"
+    },
+    {
+      "mid": "01053",
+      "jid": "31055",
+      "kid": "01446",
+      "source_group": "zalando_M2H:multiimages_x2__00516"
+    },
+    {
+      "mid": "24654",
+      "jid": "46677",
+      "kid": "47776",
+      "source_group": "zalando_M2H:singleimage_x2__00045"
+    },
+    {
+      "mid": "42178",
+      "jid": "23622",
+      "kid": "16437",
+      "source_group": "VITON-HD_M2H:train__06812_00"
+    },
+    {
+      "mid": "27292",
+      "jid": "17383",
+      "kid": "22818",
+      "source_group": "zalando_M2H:singleimage_x2__02683"
+    },
+    {
+      "mid": "14884",
+      "jid": "45471",
+      "kid": "43336",
+      "source_group": "zalando_M2H:multiimages_x2__07367"
+    },
+    {
+      "mid": "28999",
+      "jid": "11142",
+      "kid": "40970",
+      "source_group": "zalando_M2H:singleimage_x2__04391"
+    },
+    {
+      "mid": "31985",
+      "jid": "17157",
+      "kid": "05513",
+      "source_group": "zalando_M2H:singleimage_x2__07389"
+    },
+    {
+      "mid": "20811",
+      "jid": "15587",
+      "kid": "01695",
+      "source_group": "zalando_M2H:multiimages_x2__10311"
+    },
+    {
+      "mid": "37710",
+      "jid": "32025",
+      "kid": "46677",
+      "source_group": "VITON-HD_M2H:train__01195_00"
+    },
+    {
+      "mid": "34865",
+      "jid": "45471",
+      "kid": "46677",
+      "source_group": "VITON-HD_M2H:test__00884_00"
+    },
+    {
+      "mid": "02911",
+      "jid": "23912",
+      "kid": "17383",
+      "source_group": "zalando_M2H:multiimages_x2__01430"
+    },
+    {
+      "mid": "28363",
+      "jid": "28212",
+      "kid": "17201",
+      "source_group": "zalando_M2H:singleimage_x2__03755"
+    },
+    {
+      "mid": "24572",
+      "jid": "00835",
+      "kid": "32025",
+      "source_group": "zalando_M2H:multiimages_x2__12173"
+    },
+    {
+      "mid": "47794",
+      "jid": "05507",
+      "kid": "40970",
+      "source_group": "VITON-HD_M2H:train__13914_00"
+    },
+    {
+      "mid": "41532",
+      "jid": "47776",
+      "kid": "46677",
+      "source_group": "VITON-HD_M2H:train__05990_00"
+    },
+    {
+      "mid": "20825",
+      "jid": "16437",
+      "kid": "43336",
+      "source_group": "zalando_M2H:multiimages_x2__10317"
+    },
+    {
+      "mid": "18925",
+      "jid": "32025",
+      "kid": "05507",
+      "source_group": "zalando_M2H:multiimages_x2__09377"
+    },
+    {
+      "mid": "28727",
+      "jid": "46677",
+      "kid": "05507",
+      "source_group": "zalando_M2H:singleimage_x2__04119"
+    },
+    {
+      "mid": "36731",
+      "jid": "15587",
+      "kid": "17201",
+      "source_group": "VITON-HD_M2H:test__14383_00"
+    },
+    {
+      "mid": "28120",
+      "jid": "00835",
+      "kid": "43336",
+      "source_group": "zalando_M2H:singleimage_x2__03512"
+    },
+    {
+      "mid": "14486",
+      "jid": "11142",
+      "kid": "46677",
+      "source_group": "zalando_M2H:multiimages_x2__07168"
+    },
+    {
+      "mid": "23437",
+      "jid": "45471",
+      "kid": "32025",
+      "source_group": "zalando_M2H:multiimages_x2__11612"
+    },
+    {
+      "mid": "38273",
+      "jid": "45471",
+      "kid": "43336",
+      "source_group": "VITON-HD_M2H:train__01914_00"
+    },
+    {
+      "mid": "41795",
+      "jid": "11142",
+      "kid": "40778",
+      "source_group": "VITON-HD_M2H:train__06328_00"
+    },
+    {
+      "mid": "25033",
+      "jid": "28212",
+      "kid": "01695",
+      "source_group": "zalando_M2H:singleimage_x2__00424"
+    },
+    {
+      "mid": "18169",
+      "jid": "46677",
+      "kid": "40778",
+      "source_group": "zalando_M2H:multiimages_x2__09001"
+    },
+    {
+      "mid": "09367",
+      "jid": "11142",
+      "kid": "05507",
+      "source_group": "zalando_M2H:multiimages_x2__04626"
+    },
+    {
+      "mid": "22660",
+      "jid": "23520",
+      "kid": "05507",
+      "source_group": "zalando_M2H:multiimages_x2__11227"
+    },
+    {
+      "mid": "44418",
+      "jid": "11142",
+      "kid": "47776",
+      "source_group": "VITON-HD_M2H:train__09667_00"
+    },
+    {
+      "mid": "23044",
+      "jid": "40778",
+      "kid": "47776",
+      "source_group": "zalando_M2H:multiimages_x2__11417"
+    },
+    {
+      "mid": "19081",
+      "jid": "01695",
+      "kid": "17087",
+      "source_group": "zalando_M2H:multiimages_x2__09453"
+    },
+    {
+      "mid": "15159",
+      "jid": "22818",
+      "kid": "28212",
+      "source_group": "zalando_M2H:multiimages_x2__07501"
+    },
+    {
+      "mid": "34638",
+      "jid": "38551",
+      "kid": "06913",
+      "source_group": "zalando_M2H:singleimage_x2__10058"
+    },
+    {
+      "mid": "44764",
+      "jid": "00835",
+      "kid": "45471",
+      "source_group": "VITON-HD_M2H:train__10110_00"
+    },
+    {
+      "mid": "46132",
+      "jid": "38551",
+      "kid": "00835",
+      "source_group": "VITON-HD_M2H:train__11838_00"
+    },
+    {
+      "mid": "05802",
+      "jid": "17087",
+      "kid": "01446",
+      "source_group": "zalando_M2H:multiimages_x2__02862"
+    },
+    {
+      "mid": "47032",
+      "jid": "05507",
+      "kid": "32025",
+      "source_group": "VITON-HD_M2H:train__12980_00"
+    },
+    {
+      "mid": "43188",
+      "jid": "08239",
+      "kid": "11142",
+      "source_group": "VITON-HD_M2H:train__08103_00"
+    },
+    {
+      "mid": "24605",
+      "jid": "40778",
+      "kid": "08239",
+      "source_group": "zalando_M2H:multiimages_x2__12189"
+    },
+    {
+      "mid": "22633",
+      "jid": "38551",
+      "kid": "00835",
+      "source_group": "zalando_M2H:multiimages_x2__11214"
+    },
+    {
+      "mid": "41196",
+      "jid": "40970",
+      "kid": "47776",
+      "source_group": "VITON-HD_M2H:train__05577_00"
+    },
+    {
+      "mid": "12132",
+      "jid": "06913",
+      "kid": "38551",
+      "source_group": "zalando_M2H:multiimages_x2__06000"
+    },
+    {
+      "mid": "42176",
+      "jid": "01695",
+      "kid": "25774",
+      "source_group": "VITON-HD_M2H:train__06810_00"
+    },
+    {
+      "mid": "39907",
+      "jid": "40970",
+      "kid": "05507",
+      "source_group": "VITON-HD_M2H:train__03992_00"
+    },
+    {
+      "mid": "44011",
+      "jid": "32025",
+      "kid": "11142",
+      "source_group": "VITON-HD_M2H:train__09150_00"
+    },
+    {
+      "mid": "15827",
+      "jid": "00835",
+      "kid": "23622",
+      "source_group": "zalando_M2H:multiimages_x2__07835"
+    },
+    {
+      "mid": "06407",
+      "jid": "11142",
+      "kid": "32025",
+      "source_group": "zalando_M2H:multiimages_x2__03162"
+    },
+    {
+      "mid": "16822",
+      "jid": "23520",
+      "kid": "23622",
+      "source_group": "zalando_M2H:multiimages_x2__08330"
+    },
+    {
+      "mid": "21746",
+      "jid": "17087",
+      "kid": "23912",
+      "source_group": "zalando_M2H:multiimages_x2__10776"
+    },
+    {
+      "mid": "11165",
+      "jid": "45471",
+      "kid": "40778",
+      "source_group": "zalando_M2H:multiimages_x2__05519"
+    },
+    {
+      "mid": "04277",
+      "jid": "05513",
+      "kid": "08286",
+      "source_group": "zalando_M2H:multiimages_x2__02108"
+    },
+    {
+      "mid": "32564",
+      "jid": "05507",
+      "kid": "11142",
+      "source_group": "zalando_M2H:singleimage_x2__07971"
+    },
+    {
+      "mid": "23316",
+      "jid": "46677",
+      "kid": "00835",
+      "source_group": "zalando_M2H:multiimages_x2__11552"
+    },
+    {
+      "mid": "37288",
+      "jid": "45471",
+      "kid": "05507",
+      "source_group": "VITON-HD_M2H:train__00656_00"
+    },
+    {
+      "mid": "00183",
+      "jid": "11142",
+      "kid": "08239",
+      "source_group": "zalando_M2H:multiimages_x2__00091"
+    },
+    {
+      "mid": "21663",
+      "jid": "17207",
+      "kid": "01695",
+      "source_group": "zalando_M2H:multiimages_x2__10734"
+    },
+    {
+      "mid": "36689",
+      "jid": "16437",
+      "kid": "08239",
+      "source_group": "VITON-HD_M2H:test__14031_00"
+    },
+    {
+      "mid": "11287",
+      "jid": "22818",
+      "kid": "08286",
+      "source_group": "zalando_M2H:multiimages_x2__05580"
+    },
+    {
+      "mid": "22826",
+      "jid": "01695",
+      "kid": "17201",
+      "source_group": "zalando_M2H:multiimages_x2__11309"
+    },
+    {
+      "mid": "19629",
+      "jid": "17087",
+      "kid": "33324",
+      "source_group": "zalando_M2H:multiimages_x2__09722"
+    },
+    {
+      "mid": "02771",
+      "jid": "05507",
+      "kid": "16437",
+      "source_group": "zalando_M2H:multiimages_x2__01362"
+    },
+    {
+      "mid": "26029",
+      "jid": "33324",
+      "kid": "15587",
+      "source_group": "zalando_M2H:singleimage_x2__01420"
+    },
+    {
+      "mid": "00671",
+      "jid": "08286",
+      "kid": "25774",
+      "source_group": "zalando_M2H:multiimages_x2__00330"
+    },
+    {
+      "mid": "27032",
+      "jid": "11142",
+      "kid": "47776",
+      "source_group": "zalando_M2H:singleimage_x2__02423"
+    },
+    {
+      "mid": "06971",
+      "jid": "23520",
+      "kid": "45471",
+      "source_group": "zalando_M2H:multiimages_x2__03440"
+    },
+    {
+      "mid": "05778",
+      "jid": "01446",
+      "kid": "17087",
+      "source_group": "zalando_M2H:multiimages_x2__02852"
+    },
+    {
+      "mid": "33922",
+      "jid": "47776",
+      "kid": "23622",
+      "source_group": "zalando_M2H:singleimage_x2__09337"
+    },
+    {
+      "mid": "37498",
+      "jid": "11142",
+      "kid": "45471",
+      "source_group": "VITON-HD_M2H:train__00923_00"
+    },
+    {
+      "mid": "23799",
+      "jid": "43336",
+      "kid": "16437",
+      "source_group": "zalando_M2H:multiimages_x2__11790"
+    },
+    {
+      "mid": "06219",
+      "jid": "33324",
+      "kid": "01695",
+      "source_group": "zalando_M2H:multiimages_x2__03068"
+    },
+    {
+      "mid": "19879",
+      "jid": "32025",
+      "kid": "45471",
+      "source_group": "zalando_M2H:multiimages_x2__09846"
+    },
+    {
+      "mid": "27462",
+      "jid": "23520",
+      "kid": "47776",
+      "source_group": "zalando_M2H:singleimage_x2__02853"
+    },
+    {
+      "mid": "22644",
+      "jid": "23622",
+      "kid": "00835",
+      "source_group": "zalando_M2H:multiimages_x2__11219"
+    },
+    {
+      "mid": "30922",
+      "jid": "08239",
+      "kid": "05507",
+      "source_group": "zalando_M2H:singleimage_x2__06324"
+    },
+    {
+      "mid": "07158",
+      "jid": "38551",
+      "kid": "06913",
+      "source_group": "zalando_M2H:multiimages_x2__03530"
+    },
+    {
+      "mid": "20198",
+      "jid": "40778",
+      "kid": "32025",
+      "source_group": "zalando_M2H:multiimages_x2__10004"
+    },
+    {
+      "mid": "44725",
+      "jid": "05507",
+      "kid": "00835",
+      "source_group": "VITON-HD_M2H:train__10058_00"
+    },
+    {
+      "mid": "11788",
+      "jid": "16437",
+      "kid": "46677",
+      "source_group": "zalando_M2H:multiimages_x2__05828"
+    },
+    {
+      "mid": "21266",
+      "jid": "31055",
+      "kid": "17087",
+      "source_group": "zalando_M2H:multiimages_x2__10536"
+    },
+    {
+      "mid": "04733",
+      "jid": "23622",
+      "kid": "47776",
+      "source_group": "zalando_M2H:multiimages_x2__02335"
+    },
+    {
+      "mid": "24050",
+      "jid": "33324",
+      "kid": "17201",
+      "source_group": "zalando_M2H:multiimages_x2__11915"
+    },
+    {
+      "mid": "42751",
+      "jid": "23520",
+      "kid": "00835",
+      "source_group": "VITON-HD_M2H:train__07547_00"
+    },
+    {
+      "mid": "44854",
+      "jid": "43336",
+      "kid": "23520",
+      "source_group": "VITON-HD_M2H:train__10216_00"
+    },
+    {
+      "mid": "22915",
+      "jid": "31055",
+      "kid": "23912",
+      "source_group": "zalando_M2H:multiimages_x2__11354"
+    },
+    {
+      "mid": "13271",
+      "jid": "17383",
+      "kid": "01695",
+      "source_group": "zalando_M2H:multiimages_x2__06564"
+    },
+    {
+      "mid": "14786",
+      "jid": "16437",
+      "kid": "23622",
+      "source_group": "zalando_M2H:multiimages_x2__07318"
+    },
+    {
+      "mid": "03199",
+      "jid": "33324",
+      "kid": "17201",
+      "source_group": "zalando_M2H:multiimages_x2__01574"
+    },
+    {
+      "mid": "20142",
+      "jid": "17383",
+      "kid": "17207",
+      "source_group": "zalando_M2H:multiimages_x2__09976"
+    },
+    {
+      "mid": "27939",
+      "jid": "06913",
+      "kid": "38551",
+      "source_group": "zalando_M2H:singleimage_x2__03331"
+    },
+    {
+      "mid": "36597",
+      "jid": "38551",
+      "kid": "16437",
+      "source_group": "VITON-HD_M2H:test__13331_00"
+    },
+    {
+      "mid": "31756",
+      "jid": "17201",
+      "kid": "15587",
+      "source_group": "zalando_M2H:singleimage_x2__07160"
+    },
+    {
+      "mid": "30549",
+      "jid": "45471",
+      "kid": "40970",
+      "source_group": "zalando_M2H:singleimage_x2__05948"
+    },
+    {
+      "mid": "36606",
+      "jid": "45471",
+      "kid": "46677",
+      "source_group": "VITON-HD_M2H:test__13383_00"
+    },
+    {
+      "mid": "35099",
+      "jid": "47776",
+      "kid": "40970",
+      "source_group": "VITON-HD_M2H:test__02307_00"
+    },
+    {
+      "mid": "07223",
+      "jid": "32025",
+      "kid": "45471",
+      "source_group": "zalando_M2H:multiimages_x2__03562"
+    },
+    {
+      "mid": "06647",
+      "jid": "38551",
+      "kid": "06913",
+      "source_group": "zalando_M2H:multiimages_x2__03280"
+    },
+    {
+      "mid": "13947",
+      "jid": "33324",
+      "kid": "23912",
+      "source_group": "zalando_M2H:multiimages_x2__06899"
+    },
+    {
+      "mid": "43369",
+      "jid": "16437",
+      "kid": "38551",
+      "source_group": "VITON-HD_M2H:train__08339_00"
+    },
+    {
+      "mid": "39821",
+      "jid": "08239",
+      "kid": "05507",
+      "source_group": "VITON-HD_M2H:train__03876_00"
+    },
+    {
+      "mid": "25225",
+      "jid": "23520",
+      "kid": "43336",
+      "source_group": "zalando_M2H:singleimage_x2__00616"
+    },
+    {
+      "mid": "16283",
+      "jid": "08286",
+      "kid": "15587",
+      "source_group": "zalando_M2H:multiimages_x2__08059"
+    },
+    {
+      "mid": "47377",
+      "jid": "46677",
+      "kid": "00835",
+      "source_group": "VITON-HD_M2H:train__13411_00"
+    },
+    {
+      "mid": "09245",
+      "jid": "11142",
+      "kid": "32025",
+      "source_group": "zalando_M2H:multiimages_x2__04565"
+    },
+    {
+      "mid": "00623",
+      "jid": "31055",
+      "kid": "17087",
+      "source_group": "zalando_M2H:multiimages_x2__00308"
+    },
+    {
+      "mid": "23006",
+      "jid": "06913",
+      "kid": "38551",
+      "source_group": "zalando_M2H:multiimages_x2__11398"
+    },
+    {
+      "mid": "37772",
+      "jid": "11142",
+      "kid": "16437",
+      "source_group": "VITON-HD_M2H:train__01278_00"
+    },
+    {
+      "mid": "27354",
+      "jid": "16437",
+      "kid": "32025",
+      "source_group": "zalando_M2H:singleimage_x2__02745"
+    },
+    {
+      "mid": "42465",
+      "jid": "11142",
+      "kid": "08239",
+      "source_group": "VITON-HD_M2H:train__07178_00"
+    },
+    {
+      "mid": "18479",
+      "jid": "17087",
+      "kid": "01446",
+      "source_group": "zalando_M2H:multiimages_x2__09154"
+    },
+    {
+      "mid": "43869",
+      "jid": "23520",
+      "kid": "46677",
+      "source_group": "VITON-HD_M2H:train__08975_00"
+    },
+    {
+      "mid": "31871",
+      "jid": "22818",
+      "kid": "08286",
+      "source_group": "zalando_M2H:singleimage_x2__07275"
+    },
+    {
+      "mid": "20295",
+      "jid": "28212",
+      "kid": "01695",
+      "source_group": "zalando_M2H:multiimages_x2__10052"
+    },
+    {
+      "mid": "07497",
+      "jid": "23622",
+      "kid": "40778",
+      "source_group": "zalando_M2H:multiimages_x2__03697"
+    },
+    {
+      "mid": "01565",
+      "jid": "17207",
+      "kid": "17087",
+      "source_group": "zalando_M2H:multiimages_x2__00769"
+    },
+    {
+      "mid": "09264",
+      "jid": "38551",
+      "kid": "00835",
+      "source_group": "zalando_M2H:multiimages_x2__04574"
+    },
+    {
+      "mid": "07738",
+      "jid": "05507",
+      "kid": "46677",
+      "source_group": "zalando_M2H:multiimages_x2__03818"
+    },
+    {
+      "mid": "10332",
+      "jid": "05507",
+      "kid": "47776",
+      "source_group": "zalando_M2H:multiimages_x2__05105"
+    },
+    {
+      "mid": "02551",
+      "jid": "40778",
+      "kid": "11142",
+      "source_group": "zalando_M2H:multiimages_x2__01254"
+    },
+    {
+      "mid": "10209",
+      "jid": "25774",
+      "kid": "22818",
+      "source_group": "zalando_M2H:multiimages_x2__05045"
+    },
+    {
+      "mid": "05162",
+      "jid": "47776",
+      "kid": "32025",
+      "source_group": "zalando_M2H:multiimages_x2__02549"
+    },
+    {
+      "mid": "40304",
+      "jid": "40778",
+      "kid": "05507",
+      "source_group": "VITON-HD_M2H:train__04459_00"
+    },
+    {
+      "mid": "28351",
+      "jid": "08239",
+      "kid": "46677",
+      "source_group": "zalando_M2H:singleimage_x2__03743"
+    },
+    {
+      "mid": "37195",
+      "jid": "47776",
+      "kid": "11142",
+      "source_group": "VITON-HD_M2H:train__00542_00"
+    },
+    {
+      "mid": "43154",
+      "jid": "43336",
+      "kid": "23520",
+      "source_group": "VITON-HD_M2H:train__08062_00"
+    },
+    {
+      "mid": "19871",
+      "jid": "43336",
+      "kid": "38551",
+      "source_group": "zalando_M2H:multiimages_x2__09843"
+    },
+    {
+      "mid": "04245",
+      "jid": "31055",
+      "kid": "23912",
+      "source_group": "zalando_M2H:multiimages_x2__02092"
+    },
+    {
+      "mid": "09423",
+      "jid": "17157",
+      "kid": "22818",
+      "source_group": "zalando_M2H:multiimages_x2__04654"
+    },
+    {
+      "mid": "46325",
+      "jid": "43336",
+      "kid": "47776",
+      "source_group": "VITON-HD_M2H:train__12083_00"
+    },
+    {
+      "mid": "39637",
+      "jid": "08239",
+      "kid": "32025",
+      "source_group": "VITON-HD_M2H:train__03659_00"
+    },
+    {
+      "mid": "10407",
+      "jid": "40778",
+      "kid": "45471",
+      "source_group": "zalando_M2H:multiimages_x2__05142"
+    },
+    {
+      "mid": "24307",
+      "jid": "23520",
+      "kid": "00835",
+      "source_group": "zalando_M2H:multiimages_x2__12042"
+    },
+    {
+      "mid": "34393",
+      "jid": "05507",
+      "kid": "38551",
+      "source_group": "zalando_M2H:singleimage_x2__09809"
+    },
+    {
+      "mid": "43124",
+      "jid": "23520",
+      "kid": "32025",
+      "source_group": "VITON-HD_M2H:train__08024_00"
+    },
+    {
+      "mid": "09869",
+      "jid": "47776",
+      "kid": "32025",
+      "source_group": "zalando_M2H:multiimages_x2__04875"
+    },
+    {
+      "mid": "14397",
+      "jid": "17157",
+      "kid": "05513",
+      "source_group": "zalando_M2H:multiimages_x2__07123"
+    },
+    {
+      "mid": "11536",
+      "jid": "08239",
+      "kid": "40778",
+      "source_group": "zalando_M2H:multiimages_x2__05705"
+    }
+  ]
+}

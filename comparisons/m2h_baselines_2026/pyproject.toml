@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "m2h-baselines-2026"
+version = "0.1.0"
+description = "Reproducible mannequin-to-human adapters for recent open-source baselines"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.24",
+  "Pillow>=10.0",
+  "PyYAML>=6.0",
+]
+
+[project.scripts]
+m2h-baselines = "m2h_baselines.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["m2h_baselines*"]
+

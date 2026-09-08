@@ -1,0 +1,68 @@
+study:
+  name: M2H_Baselines_2026
+  seed: 42
+  training_repeats: 1
+  excluded_train_ids: ["47160"]
+
+paths:
+  data_root: /home/muxiangyu/datasets/M2HImage/M2H_Final_v2
+  project_root: /home/muxiangyu/programs/M2H_Baselines_2026
+  env_root: /data/muxiangyu/envs/m2h_baselines_2026
+  cache_root: /data/muxiangyu/cache/m2h_baselines_2026
+
+resolution:
+  low:
+    width: 512
+    height: 512
+    content_box: [64, 0, 448, 512]
+  native:
+    width: 768
+    height: 1024
+    content_box: [0, 0, 768, 1024]
+
+preprocess:
+  neutral_rgb: [127, 127, 127]
+  replace_labels: [1, 2, 12, 13, 14, 15, 16]
+  garment_labels: [3, 4, 5, 6, 7, 8, 9, 10, 11, 17]
+  mask_dilation: 9
+  cloth_protect_dilation: 5
+  identity_crop_padding: 0.22
+  identity_person_crop_padding: 0.12
+  garment_crop_padding: 0.12
+  head_nose_offset_scale: 1.62
+  ita_head_box_pad_x_fraction: 0.0625
+  ita_head_box_pad_y_fraction: 0.0625
+
+methods:
+  reverse_refton:
+    repo: repos/RefTon
+    status: active
+    order: 1
+  reverse_ita_mdt:
+    repo: repos/ITA-MDT
+    status: active
+    order: 2
+  reverse_idm_vton:
+    repo: repos/IDM-VTON
+    status: active
+    order: 3
+  mcld:
+    repo: repos/MCLD
+    status: active
+    order: 4
+  ominicontrol:
+    repo: repos/OminiControl
+    status: active
+    order: 5
+  scone:
+    repo: repos/Scone
+    status: deferred
+    reason: "Official training uses 8x NVIDIA A800 for four stages; current host has 2x RTX 3090 24GB."
+
+gates:
+  smoke_samples: 32
+  stability_steps: 100
+  max_peak_vram_mib: 22528
+  validation_interval: 1000
+  early_stop_patience: 5
+  early_stop_min_delta: 0.002

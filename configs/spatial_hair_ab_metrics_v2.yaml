@@ -1,0 +1,30 @@
+extends: spatial_metrics_v2.yaml
+
+metrics_v2:
+  default_runs: [spatial_hair_ab_space, spatial_hair_ab_semantic]
+  compare_runs: [spatial_hair_ab_semantic, spatial_hair_ab_space]
+  runs:
+    spatial_hair_ab_space:
+      label: Part B spatial hair reference
+      gen_dir: eval/spatial_hair_ab_space_gen
+      legacy_metrics_dir: eval/spatial_hair_ab_space_legacy_metrics
+    spatial_hair_ab_semantic:
+      label: Part B semantic DINO hair tokens
+      gen_dir: eval/spatial_hair_ab_semantic_gen
+      legacy_metrics_dir: eval/spatial_hair_ab_semantic_legacy_metrics
+    spatial_c_a4prime_space:
+      label: Part C directed from spatial-hair winner
+      gen_dir: eval/spatial_c_a4prime_space_gen
+      legacy_metrics_dir: eval/spatial_c_a4prime_space_legacy_metrics
+    spatial_c_cont_space:
+      label: Part C paired control from spatial-hair winner
+      gen_dir: eval/spatial_c_cont_space_gen
+      legacy_metrics_dir: eval/spatial_c_cont_space_legacy_metrics
+    spatial_c_a4prime_semantic:
+      label: Part C directed from semantic-hair winner
+      gen_dir: eval/spatial_c_a4prime_semantic_gen
+      legacy_metrics_dir: eval/spatial_c_a4prime_semantic_legacy_metrics
+    spatial_c_cont_semantic:
+      label: Part C paired control from semantic-hair winner
+      gen_dir: eval/spatial_c_cont_semantic_gen
+      legacy_metrics_dir: eval/spatial_c_cont_semantic_legacy_metrics

@@ -1,0 +1,57 @@
+extends: a4_directed.yaml
+
+# Pure-inference follow-up to the frozen A4 MIXED verdict. Neither endpoint
+# checkpoint nor any existing A4/B2-cont generation directory is modified.
+inference_interpolation:
+  subset: eval/cf_subset.json
+  steps: 20
+  expected_resume_trainable_hash: c4638ff746e792e9
+  endpoints:
+    b2cont_checkpoint: /data/muxiangyu/datasets/M2HImage/M2H_Final_v2/phase1/phase2_b2_cont_r16_4000_768x1024/checkpoints/final
+    a4_checkpoint: /data/muxiangyu/datasets/M2HImage/M2H_Final_v2/phase1/phase2_a4_directed_r16_4000_768x1024/checkpoints/final
+    b2cont_metrics_dir: eval/b2cont_metrics
+    a4_metrics_dir: eval/a4_metrics
+    b2p_metrics_dir: eval/b2p_gatefix_metrics
+
+  weights:
+    alphas: [0.25, 0.5, 0.75]
+    output_root: eval/winterp_gen
+    metrics_root: eval/winterp_metrics
+    status_root: eval/winterp_status
+    smoke_alpha: 0.5
+    smoke_mid_count: 5
+    smoke_output_root: eval/winterp_smoke
+    report: eval/weight_interp_report.md
+    report_json: eval/weight_interp_report.json
+    pareto_plot: eval/weight_interp_pareto.png
+    realism_detection_floor: 0.95
+    realism_detection_drop_tolerance: 0.02
+    realism_confidence_drop_tolerance: 0.03
+    favorable_identity_fraction: 0.90
+    favorable_garment_cost_fraction: 0.50
+
+  identity:
+    sample_count: 20
+    ts: [0.0, 0.25, 0.5, 0.75, 1.0]
+    seed: 0
+    identity_bank: derived/identity_bank_v2.npz
+    # identity_bank_v2 is train-only. Frozen test identities absent from it are
+    # embedded once with the exact same F_train recognizer into this eval asset.
+    allow_eval_embedding_extension: true
+    selection: eval/idinterp_metrics/selection.json
+    selection_embeddings: eval/idinterp_metrics/selection_embeddings.npz
+    output_root: eval/idinterp_gen
+    metrics_dir: eval/idinterp_metrics
+    status_root: eval/idinterp_status
+    smoke_mid_count: 2
+    smoke_output_root: eval/idinterp_smoke
+    report: eval/identity_interp_report.md
+    report_json: eval/identity_interp_report.json
+    strip_dir: eval/idinterp_metrics/strips
+    strip_count: 6
+    face_window_pad: 16
+    face_crop_size: 256
+    monotonic_epsilon: 0.005
+    significance_alpha: 0.05
+    normalized_drift_tolerance: 0.01
+

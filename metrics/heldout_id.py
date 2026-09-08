@@ -27,13 +27,19 @@ MANUAL_ADAFACE = (
 
 
 class RetinaFaceAligner:
-    def __init__(self, model_root: str | Path, device_id: int = 0, det_size: int = 640):
+    def __init__(
+        self,
+        model_root: str | Path,
+        device_id: int = 0,
+        det_size: int = 640,
+        providers: list[str] | None = None,
+    ):
         import insightface
 
         self.app = insightface.app.FaceAnalysis(
             name='antelopev2',
             root=str(model_root),
-            providers=['CUDAExecutionProvider', 'CPUExecutionProvider'],
+            providers=providers or ['CUDAExecutionProvider', 'CPUExecutionProvider'],
         )
         self.app.prepare(ctx_id=int(device_id), det_size=(int(det_size), int(det_size)))
 
@@ -83,7 +89,13 @@ def resize_face_crop_rgb(path: str | Path, image_size: int = 112) -> np.ndarray:
 
 
 class UnifaceAdaFaceRecognizer:
-    def __init__(self, cache_dir: str | Path, checkpoint: str | Path, device: torch.device):
+    def __init__(
+        self,
+        cache_dir: str | Path,
+        checkpoint: str | Path,
+        device: torch.device,
+        providers: list[str] | None = None,
+    ):
         from uniface import set_cache_dir
         from uniface.constants import AdaFaceWeights
         from uniface.recognition import AdaFace
@@ -95,10 +107,12 @@ class UnifaceAdaFaceRecognizer:
         set_cache_dir(str(cache_dir))
         if not checkpoint.exists():
             raise MetricUnavailable(f'UniFace AdaFace IR101 checkpoint not found: {checkpoint}. {MANUAL_ADAFACE}')
-        providers = ['CPUExecutionProvider']
-        if str(device).startswith('cuda'):
-            providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
-        self.model = AdaFace(model_name=AdaFaceWeights.IR_101, providers=providers)
+        runtime_providers = providers
+        if runtime_providers is None:
+            runtime_providers = ['CPUExecutionProvider']
+            if str(device).startswith('cuda'):
+                runtime_providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+        self.model = AdaFace(model_name=AdaFaceWeights.IR_101, providers=runtime_providers)
         self.device = device
 
     def embed_aligned_rgb(self, aligned_rgb: np.ndarray) -> np.ndarray:
@@ -204,19 +218,23 @@ def run_deltaid(
         torch_device = torch.device(device if torch.cuda.is_available() or not str(device).startswith('cuda') else 'cpu')
         recognizer_name = str(mcfg.get('recognizer', 'adaface_ir101')).lower()
         if recognizer_name in {'uniface_adaface_ir101', 'uniface_adaface_ir_101'}:
+            recognizer_providers = mcfg.get('recognizer_providers')
             recognizer = UnifaceAdaFaceRecognizer(
                 cache_dir=mcfg.get('cache_dir', checkpoint.parent),
                 checkpoint=checkpoint,
                 device=torch_device,
+                providers=[str(value) for value in recognizer_providers] if recognizer_providers else None,
             )
         else:
             if not str(repo):
                 raise MetricUnavailable(f'AdaFace repo is not configured. {MANUAL_ADAFACE}')
             recognizer = AdaFaceRecognizer(repo, checkpoint, torch_device, architecture=mcfg.get('architecture', 'ir_101'))
+        detector_providers = mcfg.get('detector_providers')
         detector = RetinaFaceAligner(
             model_root=mcfg.get('detector_model_root', cfg.get('cache', {}).get('arcface_model_root', '/data/muxiangyu/modelLibrary/insightface')),
             device_id=int(mcfg.get('detector_device_id', 0 if str(torch_device).startswith('cuda') else -1)),
             det_size=int(mcfg.get('det_size', 640)),
+            providers=[str(value) for value in detector_providers] if detector_providers else None,
         )
     except MetricUnavailable as exc:
         summary = _blocked_summary(out_dir, str(exc), cfg)
@@ -324,4 +342,3 @@ def run_deltaid(
     }
     write_json(out_dir / 'deltaid_summary.json', summary)
     return summary
-

@@ -1,0 +1,80 @@
+schema_version: 1
+status: frozen_for_g2_annotation
+planning_authority:
+  - .omx/plans/prd-cvpr-source-attributed-m2h.md
+  - .omx/plans/test-spec-cvpr-source-attributed-m2h.md
+
+primary_policy: main_hair
+fallback_policy: face_only
+guideline_revision: 0
+
+supports:
+  S_I: identity-exclusive
+  S_M: mannequin/context-exclusive
+  S_X: interaction-or-occlusion
+  S_U: uncertain-and-unclaimed
+
+feature_families:
+  - identity_morphology
+  - hair_appearance_geometry
+  - global_geometry_pose
+  - garment_appearance
+  - garment_drape
+  - scene
+  - occlusion
+
+ownership:
+  face_morphology: [S_I]
+  reliable_local_hair: [S_I]
+  unreliable_local_hair: [S_U]
+  global_head_pose: [S_M]
+  body_morphology_pose: [S_M]
+  garment_design: [S_M]
+  garment_gross_drape: [S_M, S_X]
+  background_scene: [S_M]
+  hair_face_contact: [S_X]
+  hair_garment_contact: [S_X]
+  unresolved: [S_U]
+
+support_separation:
+  conditioning_supports:
+    parser_name: input_sam_region_masks_v1
+    frozen: true
+    artifact_sha256: pending_freeze
+    allowed_inputs: [input_m, input_i, frozen_preprocessor]
+  evaluation_supports:
+    parser_name: fashn_segformer_b4
+    frozen: true
+    artifact_sha256: pending_freeze
+    allowed_inputs: [source_images, blinded_annotations]
+  forbidden_conditioning_inputs:
+    - output_masks
+    - photographic_targets
+    - ground_truth_or_manual_evaluation_masks
+    - evaluator_annotations
+
+hair_gate:
+  annotators: 3
+  krippendorff_alpha_min: 0.80
+  median_boundary_iou_min: 0.75
+  occlusion_fleiss_kappa_min: 0.70
+  su_fraction_max: 0.10
+  images_within_su_limit_min: 0.90
+  failed_initial_action: revise_guideline_once
+  failed_revision_action: freeze_face_only
+
+face_only_policy:
+  inner_face: S_I
+  unsupported_hair: S_U
+  visible_m_hair_subset: preregistration_required_before_use
+  face_head_boundary: S_X
+  mixing_with_main_hair_in_primary_test: forbidden
+
+exclusive_leakage_policy:
+  include: [S_I, S_M]
+  exclude: [S_X, S_U]
+
+second_parser_requirement:
+  status: unresolved
+  rule: primary_effect_direction_must_be_unchanged
+  note: cloth_safe SAM masks do not count as a second independent parser

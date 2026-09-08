@@ -1,0 +1,201 @@
+experiment:
+  id: seed0
+  output_root: /data/muxiangyu/pythonPrograms/M2HImage/artifacts/m2h_state_pilot_20260908/train
+  seed: 0
+  wandb: false
+  wandb_project: M2H-Phase1
+  wandb_run_id: phase2_a4_directed_r16_4000_768x1024
+data:
+  root: /data/muxiangyu/datasets/M2HImage/M2H_Final_v2
+  train_split: splits/train.txt
+  val_split: splits/val.txt
+  test_split: splits/test.txt
+  cache_dir: phase1/cache_768x1024
+  cf_subset: eval/cf_subset.json
+  resolution:
+    width: 768
+    height: 1024
+  prompt: a photorealistic human wearing the same garment, same body pose, natural
+    skin and hair
+  region_masks_z_dir: derived/region_masks_z
+  identity_bank: derived/identity_bank_v2.npz
+  exclude_train_ids:
+  - '47160'
+  identity_bank_v2: derived/identity_bank_v2.npz
+model:
+  base: /data/muxiangyu/pythonPrograms/M2HImage/models/hf/black-forest-labs/FLUX.1-dev
+  controlnet: /data/muxiangyu/pythonPrograms/M2HImage/models/hf/InstantX/FLUX.1-dev-Controlnet-Union
+  control_mode: 4
+  controlnet_scale: 0.75
+  local_files_only: true
+  precision: bf16
+  lora_rank: 16
+  identity_adapter:
+    type: condition_tokens_no_identity_pulid
+    version: phase1-pulid-condition-tokens-gatefix-2026-07-10
+    condition_adapter_lr_mult: 1.0
+    gate_lr_mult: 10.0
+    appearance_dim: 1024
+    garment_grid_dim: 1024
+    garment_grid_max_tokens: 64
+    token_dim: 4096
+    appearance_tokens: 4
+    pose_tokens: 1
+    gate_init: 0.1
+    dropout: 0.0
+  gradient_checkpointing:
+    enabled: true
+    transformer_block_ratio: 1.0
+  compile: false
+  load_vae_in_train: true
+  pulid:
+    repo: /data/muxiangyu/modelLibrary/PuLID
+    weight_path: /data/muxiangyu/modelLibrary/PuLID/models/pulid_flux_v0.9.1.safetensors
+    antelopev2_dir: /data/muxiangyu/modelLibrary/PuLID/models/antelopev2
+    hf_home: /data/muxiangyu/modelLibrary
+    version: v0.9.1
+    id_weight: 1.0
+    double_interval: 2
+    single_interval: 4
+    onnx_provider: cpu
+    self_check_min_l2: 1.0
+  train_recognizer:
+    type: arcface_torch_glint360k
+    architecture: iresnet100
+    backend: onnx2torch_glintr100
+    checkpoint: /data/muxiangyu/modelLibrary/insightface/models/antelopev2/glintr100.onnx
+    embedding_dim: 512
+    input_size: 112
+    detector_name: antelopev2
+    detector_model_root: /data/muxiangyu/modelLibrary/insightface
+    detector_checkpoint: /data/muxiangyu/modelLibrary/insightface/models/antelopev2/scrfd_10g_bnkps.onnx
+    det_size: 640
+    detector_threshold: 0.1
+    detector_face_crop_pad: 0.6
+    detector_min_face_crop_px: 320
+    detector_intra_op_threads: 8
+    detector_inter_op_threads: 1
+    bank_min_det_conf: 0.3
+    train_min_det_conf: 0.5
+cache:
+  dtype: bf16
+  require_coverage: true
+  num_workers: 4
+  clip_vision_model: /data/muxiangyu/pythonPrograms/M2HImage/models/local/clip-vit-large-patch14
+  arcface_model_root: /data/muxiangyu/modelLibrary/insightface
+  arcface_helper_python: /home/muxiangyu/miniconda3/envs/imagdressing_m2h/bin/python
+  arcface_helper_script: /data/muxiangyu/pythonPrograms/M2HImage/tools/arcface_embed_server.py
+  arcface_bank_helper_script: /data/muxiangyu/pythonPrograms/M2HImage/tools/arcface_bank_server.py
+  heldout_face_model: /data/muxiangyu/modelLibrary/insightface/models/antelopev2
+  head_crop_debug_count: 20
+training:
+  total_steps: 300
+  baseline_lr: 5.625e-05
+  baseline_global_batch: 18
+  micro_batch: 1
+  auto_micro_batch_probe: false
+  preferred_micro_batch: 1
+  grad_accum: 6
+  max_grad_norm: 1.0
+  head_pose_dropout: 0.1
+  optimizer: paged_adamw8bit
+  num_workers_per_rank: 8
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 4
+  checkpoint_every: 50
+  log_every: 10
+  benchmark_steps: 20
+  save_final: true
+  resume: /data/muxiangyu/datasets/M2HImage/M2H_Final_v2/phase1/phase1_warmup_b2p_pulid_gatefix_resume_768x1024/checkpoints/final
+  additional_steps: 4000
+  lr_schedule: constant
+  differential:
+    enabled: true
+    lambda_teach: 0.5
+    lambda_inv: 0.2
+    lambda_hinge: 0.0
+    tau_min: 0.2
+    tau_max: 0.8
+    diff_every: 1
+    calibration_steps: 200
+    hinge_g: null
+    hinge_g_resolved: null
+    smoke_hinge_g: 1.0
+    collapse_window_steps: 500
+    collapse_drop_fraction: 0.3
+    decode:
+      enabled: true
+      note: A2 has no VAE decode in training.
+      freq: 3
+      both: false
+      tau_min: 0.35
+      tau_max: 0.7
+      latent_scale: 0.5
+      gradient_checkpointing: true
+    identity_loss:
+      enabled: true
+      note: Reserved for A4 directional contrast; forbidden in A2.
+      recognizer: train_arcface_glint360k
+      margin: 0.1
+      lambda_dir: 0.1
+      lambda_abs: 0.05
+      min_detection_confidence: 0.5
+      max_skip_rate: 0.5
+      compensate_grad_accum: true
+    sampling: semihard
+    semihard_pool: 8
+    sampling_log_every: 100
+eval:
+  watcher_poll_seconds: 30
+  watcher_device: cuda:3
+  fixed_val_count: 8
+  identity_swap_count: 2
+  gate_move_threshold: 0.001
+  generate_steps: 20
+  guidance_scale: 3.5
+  b2_mannequin_count: 50
+  b2_identity_pool: 20
+  b2_identities_per_mannequin: 4
+  b2_seeds:
+  - 0
+  - 1
+  b2_output_dir: eval/a4_gen
+  report_path: eval/a4_report.md
+metrics:
+  output_dir: eval/a4_metrics
+  heldout_id:
+    recognizer: uniface_adaface_ir101
+    repo: /data/muxiangyu/modelLibrary/uniface
+    checkpoint: /data/muxiangyu/modelLibrary/uniface/adaface_ir_101.onnx
+    cache_dir: /data/muxiangyu/modelLibrary/uniface
+    architecture: ir_101
+    detector_model_root: /data/muxiangyu/modelLibrary/insightface
+    det_size: 640
+    gen_expand: 1.3
+    ref_expand: 1.1
+    min_crop_px: 256
+    sim_target_acceptance: 0.3
+  headpose:
+    runner: uniface_headpose
+    command: null
+    checkpoint: /data/muxiangyu/modelLibrary/uniface/headpose_resnet18.onnx
+    cache_dir: /data/muxiangyu/modelLibrary/uniface
+  garment:
+    dino: gsvton_dinov2_vitb14
+    dino_repo_root: /data/muxiangyu/pythonPrograms/GSVTON
+    dino_checkpoint: /data/muxiangyu/pythonPrograms/GSVTON/pretrained/dinov2_vitb14_pretrain.pth
+    dino_image_size: 518
+    mask_out_value: 0.5
+    high_similarity_warning_threshold: 0.92
+    previous_dead_adapter_baseline: 0.924
+_runtime:
+  world_size: 3
+  micro_batch: 1
+  grad_accum: 6
+  global_batch: 18
+  effective_lr: 5.625e-05
+  state_pilot_arm: C-H
+  ddp_find_unused_parameters: false
+  base_global_step: 8400
+  max_gpu_hours: 4.0

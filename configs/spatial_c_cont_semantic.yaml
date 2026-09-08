@@ -1,0 +1,18 @@
+extends: spatial_c_a4prime_semantic.yaml
+
+experiment:
+  id: phase1_spatial_c_cont_semantic_r16_12400_768x1024
+  wandb_run_id: phase1_spatial_c_cont_semantic_r16_12400_768x1024
+
+training:
+  differential:
+    enabled: false
+
+eval:
+  b2_output_dir: eval/spatial_c_cont_semantic_gen
+  report_path: eval/spatial_c_cont_semantic_report.md
+  response_track:
+    output_dir: artifacts/response_track_spatial_c_cont_semantic
+
+metrics:
+  output_dir: eval/spatial_c_cont_semantic_legacy_metrics

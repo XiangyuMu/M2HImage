@@ -127,8 +127,17 @@ def pil_to_tensor(image: Image.Image, resolution: Any) -> torch.Tensor:
     return torch.from_numpy(arr).permute(2, 0, 1).contiguous()
 
 
+def pad_to_square(image: Image.Image, fill: int | tuple[int, ...] = 127) -> Image.Image:
+    """Pad without stretching so every CLIP/DINO crop keeps its original aspect ratio."""
+    image = image.convert('RGB')
+    side = max(image.size)
+    canvas = Image.new('RGB', (side, side), fill)
+    canvas.paste(image, ((side - image.width) // 2, (side - image.height) // 2))
+    return canvas
+
+
 def pil_to_clip_tensor(image: Image.Image, size: int = 224) -> torch.Tensor:
-    image = image.convert('RGB').resize((size, size), Image.Resampling.BICUBIC)
+    image = pad_to_square(image.convert('RGB')).resize((size, size), Image.Resampling.BICUBIC)
     arr = np.asarray(image, dtype=np.float32) / 255.0
     mean = np.array([0.48145466, 0.4578275, 0.40821073], dtype=np.float32)
     std = np.array([0.26862954, 0.26130258, 0.27577711], dtype=np.float32)
@@ -214,7 +223,7 @@ class FluxConditionAdapter(nn.Module):
     """Trainable non-identity condition token adapter.
 
     Identity injection is handled only by frozen pretrained PuLID-FLUX. This module keeps the
-    appearance, garment-grid, and head-pose token routes and exposes learnable scalar gates.
+    appearance, optional legacy garment-grid, hair-grid, and head-pose token routes.
     """
 
     def __init__(self, cfg: dict[str, Any]) -> None:
@@ -223,23 +232,51 @@ class FluxConditionAdapter(nn.Module):
         self.appearance_tokens = int(cfg.get('appearance_tokens', 4))
         self.pose_tokens = int(cfg.get('pose_tokens', 1))
         self.max_garment_tokens = int(cfg.get('garment_grid_max_tokens', cfg.get('garment_tokens', 64)))
+        self.hair_token_mode = str(cfg.get('hair_token_mode', 'dense_with_position')).lower()
+        if self.hair_token_mode not in {'dense_with_position', 'semantic_dense'}:
+            raise ValueError(f'unknown hair_token_mode={self.hair_token_mode!r}')
+        self.hair_tokens = int(
+            cfg.get('hair_semantic_max_tokens', 32)
+            if self.hair_token_mode == 'semantic_dense'
+            else cfg.get('hair_ref_max_tokens', 64)
+        )
+        self.use_legacy_garment_tokens = bool(cfg.get('use_legacy_garment_tokens', True))
+        self.use_hair_tokens = bool(cfg.get('use_hair_tokens', False))
+        self.retain_legacy_hair_parameters = bool(
+            cfg.get('retain_legacy_hair_parameters_for_resume', False)
+        )
         self.adapter_type = str(cfg.get('type', 'condition_tokens'))
         self.version = str(cfg.get('version', 'phase1-condition-tokens'))
         gate_init = float(cfg.get('gate_init', 0.1))
         self.app_proj = nn.Sequential(nn.Linear(int(cfg.get('appearance_dim', 1024)), token_dim * self.appearance_tokens), nn.SiLU())
         self.garment_proj = nn.Linear(int(cfg.get('garment_grid_dim', cfg.get('garment_dim', 1024))), token_dim)
+        self.hair_proj = nn.Linear(int(cfg.get('hair_ref_dim', 768)), token_dim)
+        self.hair_pos_proj = nn.Linear(2, token_dim, bias=False)
         self.pose_proj = nn.Sequential(nn.Linear(7, token_dim * self.pose_tokens), nn.SiLU())
         self.appearance_gate = nn.Parameter(torch.tensor(gate_init, dtype=torch.float32))
         self.garment_gate = nn.Parameter(torch.tensor(gate_init, dtype=torch.float32))
+        self.hair_gate = nn.Parameter(torch.tensor(gate_init, dtype=torch.float32))
         self.pose_gate = nn.Parameter(torch.tensor(gate_init, dtype=torch.float32))
         self.norm = nn.LayerNorm(token_dim)
         self.dropout = nn.Dropout(float(cfg.get('dropout', 0.0)))
         self.token_dim = token_dim
         self.register_buffer('garment_pos_embed', self._make_2d_pos_embed(self.max_garment_tokens, token_dim), persistent=False)
+        if not self.use_legacy_garment_tokens:
+            self.garment_proj.requires_grad_(False)
+            self.garment_gate.requires_grad_(False)
+        if not self.use_hair_tokens and not self.retain_legacy_hair_parameters:
+            self.hair_proj.requires_grad_(False)
+            self.hair_pos_proj.requires_grad_(False)
+            self.hair_gate.requires_grad_(False)
 
     def keep_gates_fp32(self) -> None:
         """Keep scalar gates out of bf16 parameter quantization."""
-        for name in ('appearance_gate', 'garment_gate', 'pose_gate'):
+        names = ['appearance_gate', 'pose_gate']
+        if self.use_legacy_garment_tokens:
+            names.append('garment_gate')
+        if self.use_hair_tokens or self.retain_legacy_hair_parameters:
+            names.append('hair_gate')
+        for name in names:
             param = getattr(self, name)
             if param.dtype != torch.float32:
                 param.data = param.data.float()
@@ -252,6 +289,8 @@ class FluxConditionAdapter(nn.Module):
         self.to(device=device)
         self.app_proj.to(dtype=dtype)
         self.garment_proj.to(dtype=dtype)
+        self.hair_proj.to(dtype=dtype)
+        self.hair_pos_proj.to(dtype=dtype)
         self.pose_proj.to(dtype=dtype)
         self.norm.to(dtype=dtype)
         self.garment_pos_embed = self.garment_pos_embed.to(device=device, dtype=dtype)
@@ -274,7 +313,12 @@ class FluxConditionAdapter(nn.Module):
 
     @property
     def token_count(self) -> int:
-        return self.appearance_tokens + self.max_garment_tokens + self.pose_tokens
+        return (
+            self.appearance_tokens
+            + (self.max_garment_tokens if self.use_legacy_garment_tokens else 0)
+            + (self.hair_tokens if self.use_hair_tokens else 0)
+            + self.pose_tokens
+        )
 
     def _gate(self, value: torch.Tensor) -> torch.Tensor:
         return torch.clamp(value.float(), -1.0, 1.0)
@@ -285,11 +329,15 @@ class FluxConditionAdapter(nn.Module):
         return (tokens.float() * self._gate(value)).to(dtype=tokens.dtype)
 
     def gate_values(self) -> dict[str, float]:
-        return {
+        values = {
             'appearance_gate': float(torch.clamp(self.appearance_gate.detach().float(), -1.0, 1.0).cpu()),
-            'garment_gate': float(torch.clamp(self.garment_gate.detach().float(), -1.0, 1.0).cpu()),
             'head_pose_gate': float(torch.clamp(self.pose_gate.detach().float(), -1.0, 1.0).cpu()),
         }
+        if self.use_legacy_garment_tokens:
+            values['garment_gate'] = float(torch.clamp(self.garment_gate.detach().float(), -1.0, 1.0).cpu())
+        if self.use_hair_tokens or self.retain_legacy_hair_parameters:
+            values['hair_gate'] = float(torch.clamp(self.hair_gate.detach().float(), -1.0, 1.0).cpu())
+        return values
 
     def launch_note(self) -> dict[str, Any]:
         return {
@@ -298,6 +346,11 @@ class FluxConditionAdapter(nn.Module):
             'identity_route': 'disabled; handled by pretrained PuLID-FLUX only',
             'gate_order': 'post_layernorm',
             'gate_dtype': str(self.appearance_gate.dtype),
+            'legacy_garment_tokens': self.use_legacy_garment_tokens,
+            'hair_tokens': self.use_hair_tokens,
+            'hair_token_mode': self.hair_token_mode,
+            'hair_token_count': self.hair_tokens if self.use_hair_tokens else 0,
+            'retained_hair_parameters_for_resume': self.retain_legacy_hair_parameters,
             'gates': self.gate_values(),
         }
 
@@ -306,30 +359,75 @@ class FluxConditionAdapter(nn.Module):
         appearance: torch.Tensor,
         garment: torch.Tensor,
         head_pose: torch.Tensor,
+        hair_ref_tokens: torch.Tensor | None = None,
+        hair_ref_positions: torch.Tensor | None = None,
+        hair_ref_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         b = appearance.shape[0]
         app_tokens = self.app_proj(appearance).view(b, self.appearance_tokens, self.token_dim)
-        if garment.ndim == 2:
-            garment = garment.unsqueeze(1)
-        garment_tokens = self.garment_proj(garment)
-        if garment_tokens.shape[1] > self.max_garment_tokens:
-            garment_tokens = garment_tokens[:, : self.max_garment_tokens]
-        pos = self.garment_pos_embed[: garment_tokens.shape[1]].to(device=garment_tokens.device, dtype=garment_tokens.dtype)
-        garment_tokens = garment_tokens + pos.unsqueeze(0)
         pose_tokens = self.pose_proj(head_pose).view(b, self.pose_tokens, self.token_dim)
 
-        garment_count = garment_tokens.shape[1]
-        normalized = self.norm(torch.cat([app_tokens, garment_tokens, pose_tokens], dim=1))
-        app_tokens, garment_tokens, pose_tokens = torch.split(
-            normalized,
-            [self.appearance_tokens, garment_count, self.pose_tokens],
-            dim=1,
+        routes: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]] = [
+            (app_tokens, self.appearance_gate, None)
+        ]
+        if self.use_legacy_garment_tokens:
+            if garment.ndim == 2:
+                garment = garment.unsqueeze(1)
+            garment_tokens = self.garment_proj(garment)[:, : self.max_garment_tokens]
+            pos = self.garment_pos_embed[: garment_tokens.shape[1]].to(
+                device=garment_tokens.device, dtype=garment_tokens.dtype
+            )
+            routes.append((garment_tokens + pos.unsqueeze(0), self.garment_gate, None))
+        if self.use_hair_tokens:
+            if hair_ref_tokens is None or hair_ref_mask is None:
+                raise RuntimeError('hair token route enabled but hair tokens/mask are missing')
+            if hair_ref_tokens.ndim == 2:
+                hair_ref_tokens = hair_ref_tokens.unsqueeze(0)
+            if hair_ref_mask.ndim == 1:
+                hair_ref_mask = hair_ref_mask.unsqueeze(0)
+            if hair_ref_tokens.shape[1] != self.hair_tokens:
+                raise RuntimeError(f'hair token count={hair_ref_tokens.shape[1]}, expected={self.hair_tokens}')
+            valid = hair_ref_mask.to(device=hair_ref_tokens.device, dtype=hair_ref_tokens.dtype).unsqueeze(-1)
+            hair_tokens = self.hair_proj(hair_ref_tokens)
+            if self.hair_token_mode == 'dense_with_position':
+                if hair_ref_positions is None:
+                    raise RuntimeError('position-aware hair route requires hair_ref_positions')
+                if hair_ref_positions.ndim == 2:
+                    hair_ref_positions = hair_ref_positions.unsqueeze(0)
+                if hair_ref_tokens.shape[:2] != hair_ref_positions.shape[:2]:
+                    raise RuntimeError('hair token and position shapes do not match')
+                hair_tokens = hair_tokens + self.hair_pos_proj(
+                    hair_ref_positions.to(dtype=hair_ref_tokens.dtype)
+                )
+            else:
+                # Semantic hair tokens deliberately carry no spatial IDs. Keep the
+                # legacy projection in the DDP graph because resumed runs use
+                # find_unused_parameters=False and preserve the optimizer topology.
+                hair_tokens = hair_tokens + self.hair_pos_proj.weight.sum() * 0.0
+            hair_tokens = hair_tokens * valid
+            routes.append((hair_tokens, self.hair_gate, valid))
+        routes.append((pose_tokens, self.pose_gate, None))
+
+        sizes = [tokens.shape[1] for tokens, _, _ in routes]
+        normalized = torch.split(
+            self.norm(torch.cat([tokens for tokens, _, _ in routes], dim=1)), sizes, dim=1
         )
-        gated = torch.cat([
-            self._apply_gate(app_tokens, self.appearance_gate),
-            self._apply_gate(garment_tokens, self.garment_gate),
-            self._apply_gate(pose_tokens, self.pose_gate),
-        ], dim=1)
+        gated_parts = []
+        for tokens, (_, gate, valid) in zip(normalized, routes, strict=True):
+            tokens = self._apply_gate(tokens, gate)
+            if valid is not None:
+                tokens = tokens * valid.to(device=tokens.device, dtype=tokens.dtype)
+            gated_parts.append(tokens)
+        gated = torch.cat(gated_parts, dim=1)
+        if self.retain_legacy_hair_parameters and not self.use_hair_tokens:
+            # Keep the step-2500 Adam/DDP topology without re-enabling the dead route.
+            # The explicit zero dependency cannot change context but yields zero grads
+            # for all four compatibility-only parameter slots on every rank.
+            legacy_anchor = self.hair_gate * 0.0
+            legacy_anchor = legacy_anchor + self.hair_proj.weight.sum() * 0.0
+            legacy_anchor = legacy_anchor + self.hair_proj.bias.sum() * 0.0
+            legacy_anchor = legacy_anchor + self.hair_pos_proj.weight.sum() * 0.0
+            gated = gated + legacy_anchor.to(dtype=gated.dtype)
         return self.dropout(gated)
 
 

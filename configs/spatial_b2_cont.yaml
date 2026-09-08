@@ -1,0 +1,45 @@
+extends: spatial_warmup.yaml
+
+experiment:
+  id: phase2_spatial_b2_cont_r16_4000_768x1024
+  wandb_run_id: phase2_spatial_b2_cont_r16_4000_768x1024
+
+data:
+  region_masks_z_dir: derived/region_masks_z
+  identity_bank: derived/identity_bank.npz
+  exclude_train_ids: ["47160"]
+
+training:
+  total_steps: 4000
+  additional_steps: 4000
+  resume: /data/muxiangyu/datasets/M2HImage/M2H_Final_v2/phase1/phase1_spatial_conditions_r16_4400_768x1024/checkpoints/final
+  lr_schedule: constant
+  differential:
+    enabled: false
+    sampling: random
+    lambda_teach: 0.5
+    lambda_inv: 0.2
+    lambda_hinge: 0.05
+    tau_min: 0.2
+    tau_max: 0.8
+    diff_every: 1
+    calibration_steps: 200
+    hinge_g: null
+    hinge_g_resolved: null
+    smoke_hinge_g: 1.0
+    collapse_window_steps: 500
+    collapse_drop_fraction: 0.30
+    decode:
+      enabled: false
+      note: Equal-step paired-only control; no VAE decode.
+    identity_loss:
+      enabled: false
+      note: Equal-step paired-only control.
+
+eval:
+  manual_review_step: 0
+  b2_output_dir: eval/spatial_b2cont_gen
+  report_path: eval/spatial_b2cont_report.md
+
+metrics:
+  output_dir: eval/spatial_b2cont_metrics

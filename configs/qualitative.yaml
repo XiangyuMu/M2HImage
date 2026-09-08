@@ -1,0 +1,67 @@
+extends: interpolation.yaml
+
+# Post-hoc qualitative and human evaluation only. No model is loaded and no
+# generated image is modified. All paths below are resolved under data.root.
+qualitative_eval:
+  seed: 20260816
+  subset: eval/cf_subset.json
+  seed_for_panels: 0
+  panel_mid_count: 16
+  stratified_positions: [first, middle, last]
+  identities_per_mid: 4
+  human_identity_positions: [0, 2]
+  output_dir: qual
+  selection_json: qual/panel_index.json
+  panel_index: qual/panel_index.md
+
+  runs:
+    b2cont:
+      label: B2-cont
+      gen_dir: eval/b2cont_gen
+      metrics_dir: eval/b2cont_metrics
+    alpha075:
+      label: alpha=0.75
+      gen_dir: eval/winterp_gen/alpha075
+      metrics_dir: eval/winterp_metrics/alpha075
+    a4:
+      label: A4
+      gen_dir: eval/a4_gen
+      metrics_dir: eval/a4_metrics
+    a2:
+      label: A2 (appendix)
+      gen_dir: eval/a2_gen
+      metrics_dir: eval/a2_metrics
+
+  panels:
+    main_runs: [b2cont, alpha075, a4]
+    appendix_runs: [b2cont, a2, alpha075, a4]
+    overview_runs: [b2cont, alpha075, a4]
+    generated_cell: {width: 288, height: 384}
+    overview_cell: {width: 144, height: 192}
+    cloth_crop_cell: {width: 180, height: 240}
+    heatmap_cell: {width: 140, height: 180}
+
+  human_eval:
+    output_dir: human_eval
+    sheet_dir: human_eval/sheets
+    response_dir: human_eval/responses
+    key: human_eval/key.json
+    report: human_eval/report.md
+    report_json: human_eval/report.json
+    task_medians: human_eval/task_medians.csv
+    rater_qc: human_eval/rater_qc.csv
+    reassignment_needed: human_eval/reassignment_needed.csv
+    rater_count: 8
+    ratings_per_question: 3
+    attention_checks_per_rater: 6
+    max_attention_failures: 0
+    min_retained_ratings: 3
+    scale_min: 1
+    scale_max: 5
+    bootstrap_samples: 10000
+    significance_alpha: 0.05
+    visible_mean_threshold: 0.3
+    noninferiority_margin: 0.3
+    html_image_max_width: 512
+    html_image_max_height: 683
+    html_jpeg_quality: 88

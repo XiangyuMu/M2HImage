@@ -1,0 +1,40 @@
+seed: 42
+flux_path: "/home/muxiangyu/programs/M2H_Baselines_2026/models/ominicontrol/FLUX.1-dev"
+dtype: "bfloat16"
+
+model:
+  independent_condition: false
+  max_sequence_length: 256
+
+train:
+  batch_size: 1
+  accumulate_grad_batches: 8
+  dataloader_workers: 4
+  print_every_n_steps: 10
+  save_interval: 100
+  sample_interval: 100
+  max_steps: 100
+  gradient_checkpointing: true
+  gradient_clip_val: 0.5
+  save_path: "/home/muxiangyu/programs/M2H_Baselines_2026/runs/ominicontrol/smoke"
+
+  dataset:
+    manifest: "/home/muxiangyu/programs/M2H_Baselines_2026/prepared/low/train/samples.jsonl"
+    prepared_root: "/home/muxiangyu/programs/M2H_Baselines_2026/prepared"
+    target_size: [512, 512]
+    condition_size: [512, 512]
+    base_condition: "agnostic"
+    drop_text_prob: 0.1
+    drop_image_prob: 0.05
+
+  lora_config:
+    r: 4
+    lora_alpha: 4
+    init_lora_weights: "gaussian"
+    target_modules: "(.*x_embedder|.*(?<!single_)transformer_blocks\\.[0-9]+\\.norm1\\.linear|.*(?<!single_)transformer_blocks\\.[0-9]+\\.attn\\.to_k|.*(?<!single_)transformer_blocks\\.[0-9]+\\.attn\\.to_q|.*(?<!single_)transformer_blocks\\.[0-9]+\\.attn\\.to_v|.*(?<!single_)transformer_blocks\\.[0-9]+\\.attn\\.to_out\\.0|.*single_transformer_blocks\\.[0-9]+\\.norm\\.linear|.*single_transformer_blocks\\.[0-9]+\\.attn.to_k|.*single_transformer_blocks\\.[0-9]+\\.attn.to_q|.*single_transformer_blocks\\.[0-9]+\\.attn.to_v|.*single_transformer_blocks\\.[0-9]+\\.attn.to_out)"
+
+  optimizer:
+    type: "AdamW"
+    params:
+      lr: 0.0001
+      weight_decay: 0.001

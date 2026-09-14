@@ -1,0 +1,13 @@
+extends: idea_a_timestep_routed.yaml
+experiment:
+  id: idea_b_garment_weight
+  wandb_run_id: idea_b_garment_weight
+training:
+  paired_region_weighting:
+    enabled: true
+    w_cloth: 3.0
+    w_hair: 2.0
+    w_face: 1.0
+  idea:
+    name: garment_fidelity_weighting
+    mode: condition_velocity_gating

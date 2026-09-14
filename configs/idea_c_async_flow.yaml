@@ -1,0 +1,14 @@
+extends: idea_b_garment_weight.yaml
+experiment:
+  id: idea_c_async_flow
+  wandb_run_id: idea_c_async_flow
+training:
+  idea:
+    name: asynchronous_region_flow
+    mode: endpoint_preserving_region_flow
+    beta_exponents:
+      background: 1.8
+      garment: 1.5
+      garment_boundary: 1.0
+      identity: 0.7
+    region_timestep_embedding: true

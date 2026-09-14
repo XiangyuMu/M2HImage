@@ -112,6 +112,7 @@ def main() -> int:
     ap.add_argument("--strict", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--only-split", choices=("train", "val", "test"), default=None)
+    ap.add_argument("--ids-file", default=None)
     args = ap.parse_args()
     if args.num_workers != 1:
         raise ValueError("VAE cache bridge uses one resident process; use --num-workers 1")
@@ -135,7 +136,10 @@ def main() -> int:
     split_ids: dict[str, list[str]] = {s: ids(split_root / f"{s}.txt") for s in ("train", "val", "test")}
     if args.only_split:
         split_ids = {args.only_split: split_ids[args.only_split]}
-    if args.smoke_ids:
+    if args.ids_file:
+        wanted = {x.strip() for x in Path(args.ids_file).read_text().splitlines() if x.strip()}
+        split_ids = {s: [x for x in v if x in wanted] for s, v in split_ids.items()}
+    elif args.smoke_ids:
         wanted = set(args.smoke_ids)
         split_ids = {s: [x for x in v if x in wanted] for s, v in split_ids.items()}
     elif args.limit:

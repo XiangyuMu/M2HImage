@@ -1,6 +1,6 @@
 experiment:
   id: C_async_flow
-  output_root: /data/muxiangyu/experiments/M2H_Final_v2_clean_v1/experiments
+  output_root: /data/muxiangyu/experiments/M2H_Final_v2_clean_v1/role_flow/runs
   seed: 20260706
   wandb: false
   wandb_project: M2H-Phase1
@@ -8,17 +8,18 @@ experiment:
 experiment_method:
   name: C
   description: endpoint-preserving region-wise flow paths with corrected velocity targets
-  region_gamma:
-    background: 2.0
-    garment: 2.0
-    boundary: 1.0
-    identity: 0.7
+  region_schedule:
+    background: -0.5
+    garment: -0.5
+    boundary: 0.0
+    identity: 0.3
 data:
   root: /data/muxiangyu/datasets/M2HImage/M2H_Final_v2_clean_v1
   train_split: splits_person_disjoint_final/train.txt
   val_split: splits_person_disjoint_final/val.txt
   test_split: splits_person_disjoint_final/test.txt
-  cache_dir: /data/muxiangyu/datasets/M2HImage/M2H_Final_v2/phase1/cache_spatial_768x1024
+  cache_dir: /data/muxiangyu/experiments/M2H_Final_v2_clean_v1/role_flow/cache_768x1024
+  region_masks_z_dir: /data/muxiangyu/experiments/M2H_Final_v2_clean_v1/role_flow/cache_768x1024/region_masks_z
   cf_subset: eval/cf_subset.json
   resolution:
     width: 768
@@ -26,14 +27,21 @@ data:
   prompt: a photorealistic human wearing the same garment, same body pose, natural
     skin and hair
 model:
-  base: /data/muxiangyu/pythonPrograms/M2HImage/tmp/m2h_models/FLUX.1-dev
-  controlnet: /data/muxiangyu/pythonPrograms/M2HImage//tmp/m2h_models/FLUX.1-dev-Controlnet-Union
+  base: /tmp/m2h_models/FLUX.1-dev
+  controlnet: /tmp/m2h_models/FLUX.1-dev-Controlnet-Union
   control_mode: 4
   controlnet_scale: 0.75
   local_files_only: true
   precision: bf16
   lora_rank: 16
+  spatial_conditions:
+    garment_reference:
+      enabled: true
+      stride: 2
+      x_offset: 64
   identity_adapter:
+    use_legacy_garment_tokens: false
+    use_hair_tokens: false
     type: condition_tokens_no_identity_pulid
     version: phase1-pulid-condition-tokens-gatefix-2026-07-10
     condition_adapter_lr_mult: 1.0
@@ -84,7 +92,7 @@ training:
   max_grad_norm: 1.0
   head_pose_dropout: 0.1
   optimizer: paged_adamw8bit
-  num_workers_per_rank: 8
+  num_workers_per_rank: 2
   pin_memory: true
   persistent_workers: true
   prefetch_factor: 4
@@ -107,10 +115,10 @@ eval:
   b2_seeds:
   - 0
   - 1
-  b2_output_dir: eval/b2p_gatefix_gen
-  report_path: eval/b2p_gatefix_report.md
+  b2_output_dir: /data/muxiangyu/experiments/M2H_Final_v2_clean_v1/role_flow/eval/C_async_flow/generated
+  report_path: /data/muxiangyu/experiments/M2H_Final_v2_clean_v1/role_flow/eval/C_async_flow/report.md
 metrics:
-  output_dir: eval/b2p_gatefix_metrics
+  output_dir: /data/muxiangyu/experiments/M2H_Final_v2_clean_v1/role_flow/eval/C_async_flow/metrics
   heldout_id:
     recognizer: uniface_adaface_ir101
     repo: /data/muxiangyu/modelLibrary/uniface

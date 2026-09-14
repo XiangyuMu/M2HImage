@@ -30,8 +30,16 @@ def snapshot(root: Path) -> dict[str, object]:
         try:
             pid = int(pid_file.read_text().strip())
             os.kill(pid, 0)
+            proc = Path(f"/proc/{pid}")
+            cmdline = (proc / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+            stat = (proc / "stat").read_text().rsplit(")", 1)[1].split()
             status["pid"] = pid
-            status["pid_alive"] = True
+            status["process_command"] = cmdline
+            status["process_state"] = stat[0]
+            status["start_ticks"] = stat[19]
+            status["pid_alive"] = stat[0] != "Z" and "train_paired.py" in cmdline and root.name in cmdline
+            status["cpu_seconds"] = (int(stat[11]) + int(stat[12])) / os.sysconf("SC_CLK_TCK")
+            status["boot_id"] = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
         except (OSError, ValueError):
             status["pid"] = None
     try:
@@ -43,6 +51,14 @@ def snapshot(root: Path) -> dict[str, object]:
         status["gpu"] = [line.strip() for line in result.stdout.splitlines() if line.strip()]
     except (OSError, subprocess.SubprocessError):
         status["gpu"] = []
+    latest = status.get("latest_log")
+    if latest:
+        log = Path(str(latest))
+        status["log_age_seconds"] = round(time.time() - log.stat().st_mtime, 1)
+        with log.open("rb") as handle:
+            handle.seek(max(0, log.stat().st_size - 8192))
+            status["log_tail"] = handle.read().decode(errors="replace").splitlines()[-3:]
+    status["health"] = "running" if status["pid_alive"] else "not_running"
     return status
 
 

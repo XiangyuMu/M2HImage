@@ -39,6 +39,67 @@ from train_recognizer import (
 )
 
 
+def async_region_partition(
+    cloth: torch.Tensor,
+    hair: torch.Tensor,
+    face: torch.Tensor,
+) -> dict[str, torch.Tensor]:
+    """Build a soft partition of image tokens with exact unit sum.
+
+    The identity mask has priority over garment/background only through the
+    explicit overlap region. This keeps soft mask uncertainty represented while
+    making the region-wise flow a well-defined convex combination.
+    """
+    if cloth.shape != hair.shape or cloth.shape != face.shape:
+        raise ValueError(
+            f'async region masks must have identical shapes, got '
+            f'{tuple(cloth.shape)}, {tuple(hair.shape)}, {tuple(face.shape)}'
+        )
+    if cloth.ndim != 2:
+        raise ValueError(f'async region masks must be [batch,tokens], got {cloth.ndim}D')
+    values = (cloth, hair, face)
+    if not all(torch.isfinite(value).all() for value in values):
+        raise ValueError('async region masks contain non-finite values')
+    cloth, hair, face = (value.clamp(0.0, 1.0) for value in values)
+    identity = torch.maximum(face, hair)
+    partition = {
+        'background': (1.0 - cloth) * (1.0 - identity),
+        'garment': cloth * (1.0 - identity),
+        'boundary': cloth * identity,
+        'identity': identity * (1.0 - cloth),
+    }
+    total = sum(partition.values())
+    if not torch.allclose(total, torch.ones_like(total), atol=1e-5, rtol=1e-5):
+        raise RuntimeError('async region partition failed to sum to one')
+    return partition
+
+
+def bounded_region_schedule(
+    tau: torch.Tensor,
+    partition: dict[str, torch.Tensor],
+    schedule: dict[str, float],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return beta and d beta/d tau for beta=t+a*t*(1-t).
+
+    Restricting a to [-1, 1] keeps beta in [0, 1] and its derivative
+    non-negative over the complete integration interval.
+    """
+    if tau.ndim != 1:
+        raise ValueError(f'tau must be [batch], got {tau.shape}')
+    beta = torch.zeros_like(partition['background'])
+    dbeta = torch.zeros_like(beta)
+    for name, weight in partition.items():
+        value = float(schedule.get(name, 0.0))
+        if not math.isfinite(value) or value < -1.0 or value > 1.0:
+            raise ValueError(f'async region schedule {name}={value} must be in [-1,1]')
+        t = tau[:, None]
+        beta_r = t + value * t * (1.0 - t)
+        dbeta_r = 1.0 + value * (1.0 - 2.0 * t)
+        beta = beta + weight * beta_r
+        dbeta = dbeta + weight * dbeta_r
+    return beta.unsqueeze(-1), dbeta.unsqueeze(-1)
+
+
 class WarmupFlowModel(torch.nn.Module):
     def __init__(self, transformer, controlnet, adapter: FluxConditionAdapter, pulid: PuLIDFluxAdapter, cfg: dict[str, Any]) -> None:
         super().__init__()
@@ -129,37 +190,23 @@ class WarmupFlowModel(torch.nn.Module):
                 raise RuntimeError(
                     f'async flow mask shape={tuple(cloth.shape)} must match latent tokens={tuple(z0.shape[:2])}'
                 )
-            identity = torch.maximum(face, hair)
-            garment = cloth
-            background = (1.0 - torch.maximum(garment, identity)).clamp(0.0, 1.0)
-            gamma = self.experiment_cfg.get('region_gamma', {})
-            gamma_bg = float(gamma.get('background', 2.0))
-            gamma_garment = float(gamma.get('garment', 2.0))
-            gamma_boundary = float(gamma.get('boundary', 1.0))
-            gamma_identity = float(gamma.get('identity', 0.7))
-            if min(gamma_bg, gamma_garment, gamma_boundary, gamma_identity) <= 0.0:
-                raise ValueError('async flow region gamma values must be positive')
-            # Boundary receives an intermediate schedule where cloth and identity overlap.
-            overlap = (garment * identity).clamp(0.0, 1.0)
-            garment_interior = (garment - overlap).clamp(0.0, 1.0)
-            identity_only = (identity - overlap).clamp(0.0, 1.0)
-            beta = (
-                background * tau[:, None].pow(gamma_bg)
-                + garment_interior * tau[:, None].pow(gamma_garment)
-                + overlap * tau[:, None].pow(gamma_boundary)
-                + identity_only * tau[:, None].pow(gamma_identity)
-            ).unsqueeze(-1)
-            dbeta = (
-                background * gamma_bg * tau[:, None].clamp_min(1e-6).pow(gamma_bg - 1.0)
-                + garment_interior * gamma_garment * tau[:, None].clamp_min(1e-6).pow(gamma_garment - 1.0)
-                + overlap * gamma_boundary * tau[:, None].clamp_min(1e-6).pow(gamma_boundary - 1.0)
-                + identity_only * gamma_identity * tau[:, None].clamp_min(1e-6).pow(gamma_identity - 1.0)
-            ).unsqueeze(-1)
+            partition = async_region_partition(cloth, hair, face)
+            schedule = self.experiment_cfg.get('region_schedule', {})
+            # Keep compatibility with the first draft configs while using the
+            # bounded endpoint-preserving parameterization.
+            if not schedule and 'region_gamma' in self.experiment_cfg:
+                schedule = {
+                    key: float(value) - 1.0
+                    for key, value in self.experiment_cfg['region_gamma'].items()
+                }
+            beta, dbeta = bounded_region_schedule(tau, partition, schedule)
             z_tau = (1.0 - beta) * z0 + beta * z1
             target_v = dbeta * (z1 - z0)
         else:
             z_tau = (1.0 - tau_image) * z0 + tau_image * z1
             target_v = z1 - z0
+            beta = tau_image
+            dbeta = torch.ones_like(beta)
         prompt = batch['prompt_embeds'].to(device=device, dtype=dtype)
         pooled = batch['pooled_prompt_embeds'].to(device=device, dtype=dtype)
         if prompt.ndim == 2:
@@ -172,6 +219,8 @@ class WarmupFlowModel(torch.nn.Module):
             'z1': z1,
             'z_tau': z_tau,
             'target_v': target_v,
+            'beta': beta,
+            'dbeta': dbeta,
             'tau': tau,
             'async_flow': torch.tensor(float(self.async_flow_enabled), device=device),
             'prompt': prompt,
@@ -219,7 +268,18 @@ class WarmupFlowModel(torch.nn.Module):
         identity = 0.65 + 0.70 * (1.0 - t)
         garment = 1.20 - 0.25 * (1.0 - t)
         pose = 1.15 - 0.15 * (1.0 - t)
-        return {'appearance': identity, 'garment': garment, 'pose': pose}
+        return {
+            'appearance': identity,
+            'garment': garment,
+            'garment_reference': garment,
+            'pose': pose,
+            'identity': identity,
+        }
+
+    def _denoised_latents(
+        self, flow: dict[str, torch.Tensor], pred: torch.Tensor
+    ) -> torch.Tensor:
+        return flow['z_tau'].float() - flow['beta'].float() * pred.float()
 
     def _hair_inputs(
         self,
@@ -295,6 +355,7 @@ class WarmupFlowModel(torch.nn.Module):
         hidden_states = z_tau
         transformer_img_ids = img_ids
         transformer_cn = cn_samples
+        route_scales = self._route_scales(tau)
         garment_reference_token_count = 0
         hair_reference_token_count = 0
         if self.garment_reference_enabled:
@@ -323,6 +384,13 @@ class WarmupFlowModel(torch.nn.Module):
             if reference_ids.shape[0] != garment_reference_token_count:
                 raise RuntimeError(
                     f'reference IDs={reference_ids.shape[0]} and tokens={garment_reference_token_count} differ'
+                )
+            if route_scales is not None:
+                reference_scale = route_scales['garment_reference']
+                while reference_scale.ndim < reference.ndim:
+                    reference_scale = reference_scale.unsqueeze(-1)
+                reference = reference * reference_scale.to(
+                    device=device, dtype=dtype
                 )
             hidden_states = torch.cat((z_tau, reference), dim=1)
             transformer_img_ids = torch.cat((img_ids, reference_ids), dim=0)
@@ -376,7 +444,14 @@ class WarmupFlowModel(torch.nn.Module):
             )
         self.pulid.set_context(
             pulid_embed.to(device=device, dtype=dtype),
-            float(self.cfg.get('model', {}).get('pulid', {}).get('id_weight', 1.0)),
+            float(
+                self.cfg.get('model', {}).get('pulid', {}).get('id_weight', 1.0)
+                * (
+                    route_scales['identity'].float().mean().item()
+                    if route_scales is not None
+                    else 1.0
+                )
+            ),
         )
         pulid_context = self.pulid.context_kwargs()
         try:
@@ -663,8 +738,7 @@ class HairSupervisedWarmupFlowModel(WarmupFlowModel):
         if device.type == 'cuda':
             torch.cuda.synchronize(device)
         started = time.perf_counter()
-        tau = flow['tau'].float().view(-1, 1, 1)
-        z_hat = flow['z_tau'].float() - tau * pred.float()
+        z_hat = self._denoised_latents(flow, pred)
         decoded = self._decode_tokens(z_hat.index_select(0, indices))
         hair_loss, hair_metrics = self.hair_supervisor(
             decoded,
@@ -867,9 +941,8 @@ class DifferentialFlowModel(WarmupFlowModel):
                 hair_ref_latents=batch.get('cf_k_hair_ref_latents'),
             )
             transformer_count = 3.0
-            tau_view = flow['tau'].float().view(-1, 1, 1)
-            z_hat_j = flow['z_tau'].float() - tau_view * pred_j.float()
-            z_hat_k = flow['z_tau'].float() - tau_view * pred_k.float()
+            z_hat_j = self._denoised_latents(flow, pred_j)
+            z_hat_k = self._denoised_latents(flow, pred_k)
             teach_j = self._masked_l1_per_sample(
                 z_hat_j - flow['z0'].float(), batch['cloth_safe_z']
             )

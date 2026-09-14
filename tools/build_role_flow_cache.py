@@ -158,7 +158,7 @@ def main() -> int:
 
     device = torch.device(args.device)
     dtype = torch.bfloat16
-    vae = AutoencoderKL.from_pretrained(args.vae, subfolder="vae", torch_dtype=dtype, local_files_only=True)
+    vae = AutoencoderKL.from_pretrained(args.vae, subfolder="vae", torch_dtype=dtype, local_files_only=True, low_cpu_mem_usage=False)
     vae.eval().requires_grad_(False).to(device)
     rows: list[dict[str, Any]] = []
     all_prov: list[dict[str, Any]] = []

@@ -1,0 +1,19 @@
+extends: metrics_v2.yaml
+
+tile_probe:
+  checkpoint: /data/muxiangyu/datasets/M2HImage/M2H_Final_v2/phase1/phase2_a4_directed_r16_4000_768x1024/checkpoints/final
+  output_root: eval/tile_probe
+  baseline_gen_dir: eval/a4_gen
+  baseline_metrics_dir: eval/metrics_v2/a4
+  mid_count: 20
+  identities_per_mid: 2
+  seeds: [0]
+  pose_mode: 4
+  tile_mode: 1
+  pose_scale: 0.8
+  tile_scales: [0.4, 0.6, 0.8]
+  neutral_gray: 127
+  garment_gain_confirm: 0.05
+  garment_gain_reprobe: 0.02
+  panel_tile_width: 192
+  panel_tile_height: 256

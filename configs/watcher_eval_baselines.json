@@ -1,0 +1,17 @@
+{
+  "protocol_hash": "40826872040bb9738a5b5f3b4e06b527f6d3e6a8e74d24db92326a144ec48517",
+  "checkpoint_step": 2000,
+  "garment_dino_global_median": 0.7897993922233582,
+  "garment_dino_type_medians": {
+    "top": 0.8580945432186127,
+    "dress": 0.7631654739379883,
+    "pants": 0.7658737301826477,
+    "skirt": 0.7877475619316101
+  },
+  "head5_global_median": 0.019803253933787346,
+  "body_global_median": 0.010739763732999563,
+  "tolerances": {
+    "garment_dino": 0.02,
+    "head5": 0.005
+  }
+}

@@ -1,0 +1,32 @@
+extends: spatial_hair_ab_space.yaml
+
+# Part B experiment: pose-agnostic DINO hair descriptors. Hair attributes need
+# color/curl/length/volume, not pixel alignment to a reference head pose.
+experiment:
+  id: phase1_spatial_hair_ab_semantic_r16_8400_768x1024
+  wandb_run_id: phase1_spatial_hair_ab_semantic_r16_8400_768x1024
+
+model:
+  identity_adapter:
+    use_hair_tokens: true
+    hair_token_mode: semantic_dense
+    hair_semantic_max_tokens: 32
+    retain_legacy_hair_parameters_for_resume: true
+  spatial_conditions:
+    hair:
+      enabled: true
+      reference:
+        enabled: false
+
+training:
+  hair_ab:
+    spatial_control: false
+
+eval:
+  b2_output_dir: eval/spatial_hair_ab_semantic_gen
+  report_path: eval/spatial_hair_ab_semantic_report.md
+  response_track:
+    output_dir: artifacts/response_track_hair_ab_semantic
+
+metrics:
+  output_dir: eval/spatial_hair_ab_semantic_legacy_metrics

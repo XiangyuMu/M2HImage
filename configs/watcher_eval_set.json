@@ -1,0 +1,121 @@
+{
+  "protocol_version": "m2h-watcher-fixed-v1",
+  "selection_rule": "val split; ids lexicographically sorted; first four samples per top/dress/pants/skirt with FASHN human hair label-2 area >=1%; stored order is round-robin across garment types",
+  "split": "splits/val.txt",
+  "hair_label": 2,
+  "min_hair_fraction": 0.01,
+  "per_garment_type": 4,
+  "garment_types": [
+    "top",
+    "dress",
+    "pants",
+    "skirt"
+  ],
+  "sample_ids": [
+    "00041",
+    "00430",
+    "00096",
+    "00093",
+    "00571",
+    "00807",
+    "00126",
+    "00654",
+    "00621",
+    "02331",
+    "00169",
+    "00970",
+    "00664",
+    "02811",
+    "00184",
+    "01785"
+  ],
+  "samples": [
+    {
+      "id": "00041",
+      "garment_type": "top",
+      "hair_fraction": 0.029158274332682293
+    },
+    {
+      "id": "00430",
+      "garment_type": "dress",
+      "hair_fraction": 0.023881276448567707
+    },
+    {
+      "id": "00096",
+      "garment_type": "pants",
+      "hair_fraction": 0.014942169189453125
+    },
+    {
+      "id": "00093",
+      "garment_type": "skirt",
+      "hair_fraction": 0.02794647216796875
+    },
+    {
+      "id": "00571",
+      "garment_type": "top",
+      "hair_fraction": 0.01087188720703125
+    },
+    {
+      "id": "00807",
+      "garment_type": "dress",
+      "hair_fraction": 0.04644902547200521
+    },
+    {
+      "id": "00126",
+      "garment_type": "pants",
+      "hair_fraction": 0.0123443603515625
+    },
+    {
+      "id": "00654",
+      "garment_type": "skirt",
+      "hair_fraction": 0.026125590006510418
+    },
+    {
+      "id": "00621",
+      "garment_type": "top",
+      "hair_fraction": 0.020961761474609375
+    },
+    {
+      "id": "02331",
+      "garment_type": "dress",
+      "hair_fraction": 0.020150502522786457
+    },
+    {
+      "id": "00169",
+      "garment_type": "pants",
+      "hair_fraction": 0.045993804931640625
+    },
+    {
+      "id": "00970",
+      "garment_type": "skirt",
+      "hair_fraction": 0.015532175699869791
+    },
+    {
+      "id": "00664",
+      "garment_type": "top",
+      "hair_fraction": 0.012652079264322916
+    },
+    {
+      "id": "02811",
+      "garment_type": "dress",
+      "hair_fraction": 0.034998575846354164
+    },
+    {
+      "id": "00184",
+      "garment_type": "pants",
+      "hair_fraction": 0.056514739990234375
+    },
+    {
+      "id": "01785",
+      "garment_type": "skirt",
+      "hair_fraction": 0.08246612548828125
+    }
+  ],
+  "counts_by_garment_type": {
+    "top": 4,
+    "dress": 4,
+    "pants": 4,
+    "skirt": 4
+  },
+  "protocol_hash": "40826872040bb9738a5b5f3b4e06b527f6d3e6a8e74d24db92326a144ec48517"
+}

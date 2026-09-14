@@ -1,0 +1,84 @@
+extends: spatial_warmup_resume_hair.yaml
+
+experiment:
+  id: phase1_spatial_hair_incontext_fixedset_resume_r16_4400_768x1024
+  wandb_run_id: phase1_spatial_hair_incontext_fixedset_resume_r16_4400_768x1024
+
+model:
+  identity_adapter:
+    # The token route moved only 0.00013 after 4000+ steps and is removed from
+    # the condition sequence. Retain its parameter slots solely so the step-2500
+    # Adam state can be restored without remapping unrelated parameters.
+    use_hair_tokens: false
+    retain_legacy_hair_parameters_for_resume: true
+  spatial_conditions:
+    garment_reference:
+      enabled: true
+      stride: 1
+      x_offset: 64
+    hair:
+      enabled: true
+      reference:
+        enabled: true
+        # Hair is spatially small; 2D stride-2 keeps grid geometry at 768 tokens.
+        stride: 2
+        y_offset: 64
+    head_control:
+      # 20-sample DWPose overlay audit: 0.48/1.62 -> 0.47/1.55 reduced
+      # median normalized landmark error by 17.8%. Lower synthetic exposure
+      # while preserving both real and theta-synthesized control sources.
+      shoulder_scale: 0.47
+      nose_offset_scale: 1.55
+      synthetic_probability: 0.25
+
+cache:
+  hair_ref_min_area_fraction: 0.01
+
+training:
+  total_steps: 4400
+  additional_steps: null
+  resume: /data/muxiangyu/datasets/M2HImage/M2H_Final_v2/phase1/phase1_spatial_hair_incontext_resume_v2_r16_4400_768x1024/checkpoints/step-002500
+  hair_loss:
+    enabled: true
+    decode_freq: 2
+    lambda_hair: 0.50
+
+eval:
+  b2_output_dir: eval/b2p_spatial_hair_incontext_fixedset_gen
+  report_path: eval/b2p_spatial_hair_incontext_fixedset_report.md
+  watcher_eval_set: configs/watcher_eval_set.json
+  fixed_val_count: 16
+  response_track:
+    enabled: true
+    output_dir: artifacts/response_track_hair_incontext_fixed
+    baseline_snapshot: artifacts/rebaseline_fixed_set/step2000.json
+    historical_snapshots:
+      - artifacts/rebaseline_fixed_set/step2500.json
+    required_history_steps: [2000, 2500]
+    auto_backfill: true
+    auto_backfill_config: configs/spatial_warmup_resume_hair_incontext.yaml
+    backfill_device: cuda:0
+    rebaseline_output_dir: artifacts/rebaseline_fixed_set
+    historical_checkpoints:
+      2000: /data/muxiangyu/datasets/M2HImage/M2H_Final_v2/phase1/phase1_spatial_hair_region_resume_r16_4400_768x1024/checkpoints/step-002000
+      2500: /data/muxiangyu/datasets/M2HImage/M2H_Final_v2/phase1/phase1_spatial_hair_incontext_resume_v2_r16_4400_768x1024/checkpoints/step-002500
+    sample_count: 16
+    metric_sample_count: 16
+    visible_hair_sample_count: 16
+    visible_hair_min_fraction: 0.01
+    trend_gate_steps: [2500, 3000, 3500]
+    hair_hard_stop_step: 3000
+    hair_concentration_min: 1.10
+    hair_dino_flat_slope: 0.001
+    hair_lab_flat_slope: -0.01
+    garment_median_tolerance: 0.02
+    head5_median_tolerance: 0.005
+    body_median_tolerance: 0.005
+    regression_intervals_to_stop: 2
+    min_face_detection_rate: 1.0
+    swap_regression_tolerance: 0.05
+    garment_negative_intervals_to_stop: 2
+    visual_regression_marker: VISUAL_REGRESSION
+
+metrics:
+  output_dir: eval/b2p_spatial_hair_incontext_fixedset_metrics

@@ -1,0 +1,88 @@
+extends: warmup.yaml
+
+experiment:
+  id: phase1_spatial_conditions_r16_4400_768x1024
+  wandb_run_id: phase1_spatial_conditions_r16_4400_768x1024
+
+data:
+  cache_dir: phase1/cache_spatial_768x1024
+
+model:
+  lora_rank: 16
+  identity_adapter:
+    type: condition_tokens_no_identity_pulid
+    version: phase1-spatial-hair-2026-08-17
+    use_legacy_garment_tokens: false
+    use_hair_tokens: true
+    hair_ref_dim: 768
+    hair_ref_max_tokens: 64
+    condition_adapter_lr_mult: 1.0
+    gate_lr_mult: 10.0
+    appearance_dim: 1024
+    garment_grid_dim: 1024
+    garment_grid_max_tokens: 64
+    token_dim: 4096
+    appearance_tokens: 4
+    pose_tokens: 1
+    gate_init: 0.1
+    dropout: 0.0
+  spatial_conditions:
+    garment_reference:
+      enabled: true
+      # Probe full 6144-token attention first. The VRAM gate may resolve this to 2.
+      stride: 1
+      x_offset: 64
+    head_control:
+      enabled: true
+      real_source: dwpose/with_head/mannequin
+      # Median-calibrated on 999 valid mannequin neck/nose/shoulder geometries.
+      nose_offset_scale: 1.62
+      shoulder_scale: 0.48
+      synthetic_probability: 0.5
+    hair:
+      enabled: true
+      clean_appearance: true
+      token_source: dinov2_dense_hair
+
+cache:
+  # Existing expensive target/PuLID/text assets are copied, never modified in place.
+  base_cache_dir: phase1/cache_768x1024
+  neutral_gray: 127
+  hair_label: 2
+  appearance_bbox_pad_fraction: 0.08
+  spatial_debug_count: 20
+  hair_dino:
+    name: GSVTON DINOv2 ViT-B/14
+    repo_root: /data/muxiangyu/pythonPrograms/GSVTON
+    checkpoint: /data/muxiangyu/pythonPrograms/GSVTON/pretrained/dinov2_vitb14_pretrain.pth
+    image_size: 518
+
+training:
+  total_steps: 4400
+  additional_steps: null
+  resume: null
+  micro_batch: 1
+  preferred_micro_batch: 1
+  auto_micro_batch_probe: false
+  hair_loss:
+    # Phase 1 remains paired flow only. Phase 2 may enable the differentiable DINO hair objective.
+    enabled: false
+    lambda: 0.05
+    parser_model_dir: /data/muxiangyu/pythonPrograms/M2HImage/models/hf/fashn-ai/fashn-human-parser
+    parser_input_width: 384
+    parser_input_height: 576
+    hair_label: 2
+    min_hair_area_fraction: 0.005
+    dino_repo_root: /data/muxiangyu/pythonPrograms/GSVTON
+    dino_checkpoint: /data/muxiangyu/pythonPrograms/GSVTON/pretrained/dinov2_vitb14_pretrain.pth
+    dino_image_size: 518
+    gradient_checkpointing: true
+
+eval:
+  b2_output_dir: eval/b2p_spatial_gen
+  report_path: eval/b2p_spatial_report.md
+  watcher_manual_checklist: [garment_same_item, hair_matches_reference, head_follows_mannequin]
+  manual_review_step: 500
+
+metrics:
+  output_dir: eval/b2p_spatial_metrics

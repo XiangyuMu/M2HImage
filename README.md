@@ -1,10 +1,10 @@
-# M2HImage FLUX Phase 1 Warmup / B2' / A2 / A4 / Inference Analysis
+# M2HImage FLUX Phase 1 Warmup / B2' / A2 / A4 / Inference Diagnostics
 
-This repository contains the FLUX.1-dev MA-RA-CDT paired warmup, B2' adapter-only baseline, A2 differential counterfactual experiment, the preregistered one-shot A4 identity-directed gate, and the post-hoc inference-only identity-velocity analysis.
+This repository contains the FLUX.1-dev MA-RA-CDT paired warmup, B2' adapter-only baseline, A2 differential counterfactual experiment, the preregistered one-shot A4 identity-directed gate, and the post-hoc inference-only velocity, garment-protection, trainable-weight interpolation, and identity-condition interpolation diagnostics.
 
-## Current Project Snapshot (2026-08-15)
+## Current Project Snapshot (2026-08-17)
 
-The project is intentionally paused after the completed A4 one-shot gate and inference-only garment-protection study. No training, generation, or evaluation process is expected to be running. Code and compact A2/A4 result reports are on GitHub; datasets, caches, generated images, checkpoints, and the new post-hoc reports remain on the local data volume and are not tracked by Git.
+The original A2/A4 mechanism sequence and its preregistered verdicts remain frozen. A new, separately registered spatial-conditioning study is active to repair the weak garment, hair, and head-direction input routes without rewriting those results. The tile zero-shot probe and the 6144-token rank-16 A6000 VRAM gate have passed; the spatial cache and repaired warmup are the current execution path. Code and compact reports are tracked in Git; datasets, caches, generated images, checkpoints, and large evaluation artifacts remain on the local data volume and are not tracked by Git.
 
 ### Final Experiment Results
 
@@ -33,6 +33,11 @@ Frozen decisions:
 - The analysis-selected `tau=[0.0,0.2]` protocol was promoted to a co-primary full 400-image run. It reached GarmentSim `0.877685`, recovering `-0.68%` of the gap, while `sim_target=0.494381` dropped only `0.000015` from A4. Its B2-cont deterioration remained significant (`p=0.0009546`). Pose, head-pose, face detection, and detector-confidence constraints passed.
 - Weak identity scale `0.3` remains a fixed 100-image secondary ablation (`GarmentSim=0.8708`) and is not used for either co-primary verdict.
 - Both inference-protection verdicts are `NULL`: all-step protection worsens the garment trade-off, while late-window protection is nearly identity/garment neutral relative to A4 but recovers none of the B2-cont gap. The regression is primarily encoded in the trained A4 weights rather than removable online identity conditioning. No checkpoint was trained or modified, and this post-hoc result does not alter the frozen A4 `MIXED` verdict.
+- Trainable-weight interpolation generated and evaluated 400 images at each of `alpha={0.25,0.50,0.75}` with no failures. All three middle points lie above the endpoint metric line, but the strict preregistered monotonicity test fails because `sim_target` changes from `0.494553` at `alpha=0.75` to `0.494396` at A4. The fixed verdict is `NON-LINEAR`; no post-hoc tolerance is applied.
+- The `alpha=0.75` point retains GarmentSim `0.882967` versus A4's `0.877802` while slightly exceeding A4 `sim_target`. It is useful diagnostically, but does not satisfy the registered operating-point rule because it spends more than 50% of the endpoint garment cost.
+- Identity-condition interpolation completed 20 paired A4/B2-cont paths (200 images) with no failures and no PuLID slerp fallback. A4 improved path efficiency (`0.7410` vs `0.7046`, `p=0.048654`) but not monotonic-violation rate significantly (`0.0750` vs `0.0813`, `p=0.483258`), so the fixed verdict is `EQUAL`, not `DECOUPLED`.
+- Normalized garment drift uses exactly `max DINO drift / abs(sim_to_j(t=1)-sim_to_j(t=0))`. Its A4/B2-cont means are `0.1524/1.2677` and medians are `0.0678/0.0926`; the B2-cont mean is inflated by paths with near-zero identity denominator, which are retained rather than clipped.
+- The train-only identity bank lacked all frozen test identities. Selection therefore used an eval-only 18-ID extension produced by the same F_train Glint360K recognizer (hash `4ab1d6435d639628`); held-out AdaFace was used only by the metric runner and never for pair selection.
 
 Per preregistration, **do not launch a third mechanism-rescue run from these experiments**. The defensible project conclusion is: identity-directed counterfactual training improves identity control, but the tested objective trades away garment stability. Any future training must be framed as a new, separately preregistered study rather than an A4 retry.
 
@@ -74,6 +79,14 @@ eval/a4_prot_scale03_gen/                                 weak-scale ablation, 1
 eval/a4_prot_scale03_metrics/                             weak-scale official metrics
 eval/a4_prot_gate_report.md                               inference-protection fixed-rule report
 eval/a4_prot_gate_report.json                             machine-readable report
+eval/winterp_gen/alpha{025,050,075}/                      weight interpolation, 3 x 400 images
+eval/winterp_metrics/alpha{025,050,075}/                  three official metric suites per alpha
+eval/weight_interp_report.md                              five-point Pareto report
+eval/weight_interp_report.json                            machine-readable weight report
+eval/weight_interp_pareto.png                             endpoint-line Pareto plot
+eval/idinterp_gen/{a4,b2cont}/                            identity paths, 2 x 100 images
+eval/idinterp_metrics/                                    selection provenance, CSVs, strips, plots
+eval/identity_interp_report.{md,json}                     paired identity-path report
 eval/cf_subset.json                                       shared immutable evaluation subset
 ```
 
@@ -87,7 +100,8 @@ The final trainable checkpoint for each run is under its `checkpoints/final/` di
 4. Treat `eval/cf_subset.json`, held-out AdaFace hash `f2eb07d03de0`, DINOv2 hash `0b8b82f85de9`, and head-pose runner hash `61c34e877989` as frozen evaluation protocol state.
 5. For writing/analysis, use the committed A2/A4 reports and the frozen CSVs in `eval/*_metrics/`. Do not recompute only one side of a comparison with changed weights or preprocessing.
 6. Read `eval/id_velocity/analysis_report.md` and `eval/a4_prot_gate_report.md`. The protected-sampling result is diagnostic only and must not be presented as changing the frozen A4 verdict.
-7. If research resumes, begin with a written new hypothesis and preregistered comparator. The current A2/A4 mechanism sequence is closed; no post-hoc lambda tuning should be reported as the same experiment.
+7. Read `eval/weight_interp_report.md` and `eval/identity_interp_report.md` before proposing another inference intervention. Their fixed verdicts are `NON-LINEAR` and `EQUAL`; neither changes the A4 `MIXED` verdict.
+8. If research resumes, begin with a written new hypothesis and preregistered comparator. The current A2/A4 mechanism sequence is closed; no post-hoc lambda tuning should be reported as the same experiment.
 
 ## Critical Notes
 
@@ -103,7 +117,9 @@ The final trainable checkpoint for each run is under its `checkpoints/final/` di
 - A2 failed the preregistered garment axis, but `diagnose_a2.py` found the differential losses `BOUND` and held-out DeltaID gain significant (`+0.011327`, greater-side Wilcoxon `p=2.6466e-6`). This is the fixed evidence required to proceed to A4.
 - A4 is a single final mechanism run. It adds semi-hard j/k sampling and a differentiable identity-directed decode loss, starts from the same B2' checkpoint as A2/B2-cont, and reuses the existing B2-cont as control. No third rescue training run is permitted.
 - The completed A4 gate verdict is `MIXED`: held-out identity improved strongly (`sim_target +0.0721`, greater-side Wilcoxon `p<1e-8`), while GarmentSim regressed from `0.8951` to `0.8778` (`p=0.0010`). Per preregistration, this is reported as an identity-garment trade-off and no further mechanism run is authorized.
-- The inference-only protected sampler uses two identity branches with one shared ControlNet result per Euler step: `v = v_on - M_protect * (v_on - v_off)`. Both completed co-primary fixed-rule verdicts are `NULL`; the late window preserves A4 identity and garment values but does not recover the B2-cont garment gap. LoRA interpolation is noted only as future work and was not run.
+- The inference-only protected sampler uses two identity branches with one shared ControlNet result per Euler step: `v = v_on - M_protect * (v_on - v_off)`. Both completed co-primary fixed-rule verdicts are `NULL`; the late window preserves A4 identity and garment values but does not recover the B2-cont garment gap.
+- Read-only interpolation of the 532 LoRA and 11 adapter tensors passed exact key/shape/dtype alignment and shared-start-hash checks. The strict weight-space verdict is `NON-LINEAR`, although every middle point is above the endpoint metric line.
+- Identity interpolation pair selection uses only F_train Glint360K embeddings. Held-out AdaFace remains isolated in `metrics/identity_interp_metrics.py` and is never imported by generation or selection code.
 - Held-out AdaFace IR-101 is evaluation-only. A4 training uses frozen Glint360K ArcFace `glintr100.onnx`, converted to a differentiable PyTorch graph with `onnx2torch`; training code fails if an AdaFace path is configured.
 
 ## Active Files
@@ -114,6 +130,8 @@ configs/a2_diff.yaml             A2: equal-step continuation with teach/invarian
 configs/b2_cont.yaml             B2-cont: equal-step paired-only continuation
 configs/a4_directed.yaml         A4: A2 losses + semi-hard sampling + directed identity decode loss
 configs/a4_protected.yaml        inference-only velocity/protection protocol and fixed thresholds
+configs/interpolation.yaml       pure-inference weight/identity interpolation protocol and thresholds
+configs/qualitative.yaml         fixed qualitative-panel and blind human-evaluation protocol
 pulid_flux.py                    frozen PuLID-FLUX v0.9.1 loader, ID embedder, transformer hook self-check
 build_cache.py                   offline latent/text/PuLID-ID/appearance/garment_grid/head-pose cache
 build_region_masks_z.py          CPU builder for cloth/body-bg/face packed-token masks
@@ -130,6 +148,17 @@ eval_a4_gate_report.py           one-shot identity-axis A4 vs B2-cont preregiste
 analyze_id_velocity.py           real-trajectory regional energy, low-rank, and consistency probe
 sampling_protected.py            isolated dual-forward protected Euler sampler and 4-GPU sharding
 eval_protected_gate.py           protected vs A4/B2-cont fixed-rule paired report
+interp_common.py                 shared checkpoint validation, model reuse, sharding, slerp, and status IO
+interp_weights.py                aligned trainable-state interpolation and full subset generation
+interp_identity.py               F_train-selected PuLID/appearance identity-path generation
+metrics/identity_interp_metrics.py fixed-window LPIPS, held-out monotonicity, masked-DINO path metrics
+eval_interp_reports.py           fixed weight-Pareto and identity-decoupling verdicts
+qual_eval_common.py              CPU-only selection, metric CSV, path validation, and manifest helpers
+make_qual_panels.py              main/A2 appendix panels, cloth zoom heatmaps, overview, and index
+human_eval_build.py              balanced 240-question bank and eight self-contained blind HTML sheets
+human_eval_score.py              attention QC, medians, CIs, Wilcoxon, ordinal alpha, and fixed verdicts
+run_interpolation.py             shared `--part {weights,identity,all}` stage orchestrator
+scripts/run_interpolation.sh     shell entry for smoke, generation, metrics, and reports
 scripts/sanity_flux_timestep.py  prompt-only FLUX timestep sanity check
 scripts/verify_condition_gates.py real FLUX/ControlNet/PuLID one-step gate verification
 scripts/a2_vram_probe.py         real 1x ControlNet + 3x transformer differential VRAM probe
@@ -166,6 +195,307 @@ scripts/run_protected_inference.sh gate
 ```
 
 The analysis completed 20 stratified mids and stored only that subset's bf16 velocities. Both co-primary protocols completed 400/400 images; scale03 completed 100/100, with no per-image failures. All generated images are native `768x1024`. The final report judges each co-primary independently in `eval/a4_prot_gate_report.md`; both fixed verdicts are `NULL`.
+
+## Inference-only Weight And Identity Interpolation
+
+These diagnostics load the frozen B2-cont and A4 endpoints read-only. They do not train, rewrite checkpoints, or alter the established A4/B2-cont generation and metric directories. Generation is deterministic at the frozen subset seeds and native `768x1024` resolution.
+
+### Trainable-weight scan
+
+Only the exactly aligned LoRA A/B tensors, condition projections, and gate scalars are interpolated. The base transformer, ControlNet, PuLID, and VAE remain frozen and shared.
+
+| alpha | sim_target | DeltaID | GarmentSim |
+|---:|---:|---:|---:|
+| 0.00 | 0.422300 | 0.408815 | 0.895092 |
+| 0.25 | 0.457956 | 0.441412 | 0.891119 |
+| 0.50 | 0.482293 | 0.467024 | 0.883466 |
+| 0.75 | 0.494553 | 0.479345 | 0.882967 |
+| 1.00 | 0.494396 | 0.479407 | 0.877802 |
+
+The strict verdict is `NON-LINEAR`: GarmentSim decreases monotonically, realism stays healthy, and all middle points are favorable relative to the endpoint metric line, but `sim_target` is not strictly monotonic at the final `0.75 -> 1.00` segment.
+
+### Identity-condition paths
+
+Twenty garment-stratified mids use the bank-v2-farthest identity pair, fixed noise, five interpolation values, and paired A4/B2-cont generation. PuLID tokens use tokenwise slerp with linearly interpolated norm; appearance uses lerp.
+
+| path metric | A4 | B2-cont | paired p |
+|---|---:|---:|---:|
+| LPIPS path efficiency | 0.740980 | 0.704588 | 0.048654 |
+| monotonic violation rate | 0.075000 | 0.081250 | 0.483258 |
+| cloth DINO pairwise similarity | 0.975836 | 0.971422 | 0.928547 |
+| sim-to-j-normalized garment drift | 0.152384 | 1.267685 | 0.985212 |
+
+The strict verdict is `EQUAL`: efficiency alone improves significantly; held-out identity monotonicity does not. The normalized-drift means are heavy-tailed because the registered denominator can approach zero, so consult the report's medians and per-path CSV before interpreting the means.
+
+### Reproduction
+
+Run stages independently; `scripts/run_interpolation.sh` is a thin wrapper around the same entry point.
+
+```bash
+python run_interpolation.py --config configs/interpolation.yaml --part weights --stage generate --smoke --overwrite
+python run_interpolation.py --config configs/interpolation.yaml --part weights --stage generate
+python run_interpolation.py --config configs/interpolation.yaml --part weights --stage metrics
+python run_interpolation.py --config configs/interpolation.yaml --part weights --stage report
+python run_interpolation.py --config configs/interpolation.yaml --part identity --stage generate --smoke --overwrite
+python run_interpolation.py --config configs/interpolation.yaml --part identity --stage generate
+python run_interpolation.py --config configs/interpolation.yaml --part identity --stage metrics
+python run_interpolation.py --config configs/interpolation.yaml --part identity --stage report
+```
+
+Full generation completed 1200/1200 weight-scan images and 200/200 identity-path images without failures. Reports are `eval/weight_interp_report.md` and `eval/identity_interp_report.md` on the local data volume.
+
+## Qualitative Panels And Blind Human Evaluation
+
+This final post-hoc readout is CPU-only. It reads the four frozen generation directories and existing metric CSVs; it never imports a model, generates an image, trains, or recomputes feature metrics.
+
+The deterministic 12-mid garment-stratified selection overlaps two global extremes: `46129` is already a stratified mid and global worst-garment, while `08054` is already stratified and global best-identity. The registered rankings therefore continue without image inspection to add `41344` (worst-garment fill) and `34224` (best-identity fill), preserving exactly 16 unique mids. The global worst garment mid is `21603` with A4-B2-cont GarmentSim `-0.1118`.
+
+Generated qualitative assets under the local data root:
+
+```text
+qual/panel_{mid}.png             16 main B2-cont / alpha=.75 / A4 panels
+qual/appendix_panel_{mid}.png    same panels with an A2 appendix row
+qual/cloth_zoom_{mid}.png        cloth-safe crops and 18 shared-scale difference maps
+qual/overview_grid.png           16 x 3 representative comparison
+qual/panel_index.{md,json}       fixed selection, metrics, tags, and paths
+```
+
+The blind bank contains exactly 240 unique normal questions: Q1=48, Q2=96, Q3=96. Every normal question is assigned to exactly three of eight raters; every rater receives 90 normal questions plus six hidden attention checks. The eight HTML files are self-contained 6-8 MB files, use opaque asset/question IDs, and contain no run, mid, jid, or filesystem path metadata. The private key hash at build time is `c72670d9a2b7ee0a`.
+
+Run and distribute in this order:
+
+```bash
+python make_qual_panels.py --config configs/qualitative.yaml --overwrite
+python human_eval_build.py --config configs/qualitative.yaml --overwrite
+# Distribute only human_eval/sheets/rater_XX.html; keep key.json private.
+# Put all returned CSVs under human_eval/responses/.
+python human_eval_score.py --config configs/qualitative.yaml
+```
+
+The scorer excludes any rater who fails at least one of six checks. If exclusion leaves any normal question below three retained ratings, it writes `human_eval/reassignment_needed.csv` and refuses a final verdict until replacement ratings are collected. The final report will be `human_eval/report.md`; it is intentionally absent before real CSVs are returned.
+
+For the paper body, use `qual/overview_grid.png`, `qual/panel_21603.png`, and `qual/cloth_zoom_21603.png`. Put the remaining main panels and A2 appendix rows in supplementary material.
+
+## Spatial-condition Repair Study (2026-08-17)
+
+This is a new study after the frozen A4 verdict. It does not rewrite the A2/A4 preregistered result. The hypothesis is that garment instance detail, head direction, and hair appearance need spatial or dense condition routes instead of low-capacity pooled semantic tokens.
+
+The zero-shot two-control probe is complete. It reused one InstantX Union ControlNet for pose mode 4 and tile mode 1, soft-masked tile residuals to the garment token region, and evaluated the first 20 frozen mids x two identities x seed 0.
+
+| setting | Garment-DINO to mannequin | gain vs A4 | body pose | head-5 | face detection |
+|---|---:|---:|---:|---:|---:|
+| A4 | 0.7607 | 0.0000 | 0.0129 | 0.0292 | 100% |
+| tile 0.4 | 0.8451 | +0.0844 | 0.0111 | 0.0291 | 100% |
+| tile 0.6 | 0.8765 | +0.1158 | 0.0102 | 0.0289 | 100% |
+| tile 0.8 | 0.8784 | +0.1176 | 0.0102 | 0.0288 | 100% |
+
+The registered decision is `CONFIRMED`: the best garment gain is `+0.1176`, above the `+0.05` gate, with no pose/head/face regression. The full report is `eval/tile_probe/report.md` on the data volume.
+
+The repaired training path in `configs/spatial_warmup.yaml` therefore uses:
+
+- `[3072 image tokens | 3072 masked-garment VAE reference tokens]`, with reference x IDs offset by 64;
+- image-only pose ControlNet residuals, explicitly zero-padded over reference tokens;
+- with-head mannequin pose controls, with deterministic 50/50 real-vs-synthesized head landmarks during training;
+- face+hair-only gray-composited appearance crops and at most 64 dense DINOv2 hair tokens;
+- legacy 64-token garment CLIP conditioning disabled, while the old path remains config-reproducible;
+- optional differentiable Hair-DINO decode loss disabled in paired Phase 1 and available for directed Phase 2.
+
+The full 6144-token rank-16 path passed the A6000 gate at `34.13 GiB` peak and `5.89 s` per micro-step, so reference stride remains 1 and LoRA rank remains 16. See `phase1/vram_report_spatial_768x1024.md`.
+
+Run in this order:
+
+```bash
+# Step 0 is already complete; rerun only when auditing the probe.
+python tile_multicontrol_probe.py --config configs/tile_probe.yaml --stage all --device cuda:0
+
+# Four independent cache shards are inferred automatically from torchrun ranks.
+CUDA_VISIBLE_DEVICES=0,1,2,3 python -m torch.distributed.run --nproc_per_node=4 \
+  build_cache.py --config configs/spatial_warmup.yaml --keys spatial --overwrite
+
+# GPU0-2 train; GPU3 watches checkpoints. Training hard-pauses at run step 500.
+CUDA_VISIBLE_DEVICES=0,1,2 python -m torch.distributed.run --nproc_per_node=3 \
+  train_paired.py --config configs/spatial_warmup.yaml
+CUDA_VISIBLE_DEVICES=3 python eval_watcher.py --config configs/spatial_warmup.yaml \
+  --ckpt-dir /data/muxiangyu/datasets/M2HImage/M2H_Final_v2/phase1/phase1_spatial_conditions_r16_4400_768x1024/checkpoints --device cuda:0
+
+# Run only after a person has checked garment, hair, and head in the step-500 panels.
+python eval_watcher.py --config configs/spatial_warmup.yaml \
+  --approve-manual-review --reviewer <name>
+CUDA_VISIBLE_DEVICES=0,1,2 python -m torch.distributed.run --nproc_per_node=3 \
+  train_paired.py --config configs/spatial_warmup.yaml \
+  --resume /data/muxiangyu/datasets/M2HImage/M2H_Final_v2/phase1/phase1_spatial_conditions_r16_4400_768x1024/checkpoints/step-000500
+# The existing GPU3 watcher keeps polling and will process later checkpoints.
+
+# Repaired system metrics and paired repair-before comparison.
+python eval_metrics_v2.py --config configs/spatial_metrics_v2.yaml --run spatial \
+  --compare spatial a4 --metrics all --device cuda:0 --pose-device cuda:1
+```
+
+The manual approval file is bound to the experiment ID, review step, reviewer, and all three checklist booleans. An automatic face/swap/gate failure cannot be cleared by the approval command.
+
+### Step-500 Hair/Region Continuation (2026-08-18)
+
+The first spatial run remains frozen at `step-000500`. Human review found correct head direction and healthy identity response, but only coarse garment and hair resemblance. The read-only response probe showed that garment-reference conditioning was connected but spatially uniform, while the hair route was weak. Continuation config `configs/spatial_warmup_resume_hair.yaml` makes only these training changes:
+
+- paired flow MSE uses mean-normalized token weights with `w_cloth=2.0` and `w_hair=2.0`;
+- every third optimizer step, when tau is in `[0.35, 0.70]`, the paired x0 estimate may receive frozen-DINO masked hair supervision with `lambda_hair=0.1`; hair area below 1% is skipped and counted;
+- appearance, hair, and head-pose gates stay in their separate fp32 optimizer group at exactly `10x` the main LR. The step-500 optimizer already had this ratio; continuation now verifies it after checkpoint restore and fails fast if it changes.
+
+`hair_z` was added incrementally to `derived/region_masks_z` for train/val/test. Main target, pose, PuLID, appearance, garment-reference, and text caches were not rebuilt. A 20-step GPU0 smoke run completed with the full VAE-DINO graph, weighted MSE, and resume state at `42.05 GiB` peak; the first formal 3-card sparse-hair step reached `42.21 GiB`. See `docs/results/spatial_hair_region_resume_vram.md`.
+
+The frozen step-500 trajectory baseline is:
+
+| reading | step 500 |
+|---|---:|
+| cloth response concentration (energy share / area share) | 1.0333 |
+| hair response / complete identity-swap response | 0.4793x |
+| Garment-DINO to mannequin, fixed 10 | 0.6804 |
+| Hair-DINO to reference, fixed 10 | 0.6377 |
+| head-five-point distance, fixed 10 | 0.01008 |
+| face detection | 100% |
+| swap ArcFace cosine | 0.4930 / 0.2356 |
+
+Artifacts are in `artifacts/response_track/step500.json` and `artifacts/response_track/response_track_curves.png`. Training-side hair loss and watcher Hair-DINO use independent code paths but the same DINOv2 checkpoint; reports disclose this limitation and retain human review plus LAB color distance as corroboration.
+
+The watcher no longer requires final visual fidelity at steps 1000/1500. It requires rising cloth concentration and hair response, positive Garment/Hair-DINO slopes, and healthy face/swap guards. Step 2000 is the hard plateau gate. If cloth concentration remains approximately 1, hair response remains below 0.5x, or either DINO curve is flat, it writes `STOP_TRAINING` with garment-attention and hair in-context recommendations.
+
+```bash
+# Rebuild only token masks when auditing the derived asset.
+/home/muxiangyu/miniconda3/envs/refton_m2h/bin/python build_region_masks_z.py \
+  --config configs/spatial_warmup_resume_hair.yaml --split train,val,test --workers 24
+
+# Required smoke test (completed).
+CUDA_VISIBLE_DEVICES=0 /home/muxiangyu/miniconda3/envs/refton_m2h/bin/python train_paired.py \
+  --config configs/spatial_warmup_resume_hair.yaml --dev-single-gpu \
+  --allow-partial-cache --smoke-steps 20 --override-output-id spatial_hair_region_smoke20_v2
+
+# Formal continuation and checkpoint watcher.
+CUDA_VISIBLE_DEVICES=0,1,2 /home/muxiangyu/miniconda3/envs/refton_m2h/bin/python \
+  -m torch.distributed.run --standalone --nproc_per_node=3 train_paired.py \
+  --config configs/spatial_warmup_resume_hair.yaml
+CUDA_VISIBLE_DEVICES=3 /home/muxiangyu/miniconda3/envs/refton_m2h/bin/python eval_watcher.py \
+  --config configs/spatial_warmup_resume_hair.yaml \
+  --ckpt-dir /data/muxiangyu/datasets/M2HImage/M2H_Final_v2/phase1/phase1_spatial_hair_region_resume_r16_4400_768x1024/checkpoints \
+  --device cuda:0
+```
+
+Live tmux sessions are `m2h_spatial_hair_train` and `m2h_spatial_hair_watcher`. At step 1000, read these first: cloth concentration, hair relative response, and the two DINO slopes.
+
+Step 1000 completed on 2026-08-18. Hair conditioning and both fixed-sample
+image metrics improved, while garment-reference response had not yet become
+spatially concentrated:
+
+| reading | step 500 | step 1000 | change / slope per 500 |
+|---|---:|---:|---:|
+| cloth response concentration | 1.0333 | 1.0227 | -0.0107 |
+| hair response / identity response | 0.4793x | 0.5697x | +0.0904x |
+| Garment-DINO to mannequin | 0.6804 | 0.8214 | +0.1410 |
+| Hair-DINO to reference | 0.6377 | 0.7646 | +0.1269 |
+| face detection | 100% | 100% | healthy |
+| maximum swap cosine | 0.4930 | 0.3265 | healthy |
+
+The registered status is `trend_not_yet_approved`: no step-1000 approval file
+was written because cloth concentration did not rise. Training continues to the
+step-1500 trend check; step 2000 remains the only hard plateau stop.
+The exact snapshot is `artifacts/response_track/step1000.json`.
+
+After step 4400 passes the trajectory gate, generate the frozen subset into the continuation-specific directory and run the full v2 comparison without overwriting the earlier spatial run:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 /home/muxiangyu/miniconda3/envs/refton_m2h/bin/python \
+  -m torch.distributed.run --standalone --nproc_per_node=4 eval_b2.py \
+  --config configs/spatial_warmup_resume_hair.yaml \
+  --ckpt /data/muxiangyu/datasets/M2HImage/M2H_Final_v2/phase1/phase1_spatial_hair_region_resume_r16_4400_768x1024/checkpoints/final \
+  --subset /data/muxiangyu/datasets/M2HImage/M2H_Final_v2/eval/cf_subset.json
+/home/muxiangyu/miniconda3/envs/refton_m2h/bin/python eval_metrics_v2.py \
+  --config configs/spatial_metrics_v2.yaml --run spatial_hair_region \
+  --compare spatial_hair_region a4 --metrics all --device cuda:0 --pose-device cuda:1
+```
+
+The same sequence is queued by `scripts/run_spatial_hair_finalize.sh`. It waits without using a GPU and refuses to generate if the trajectory watcher writes `STOP_TRAINING`.
+
+### Step-2000 Hair In-Context Continuation (2026-08-18)
+
+The step-2000 review accepted the garment and head routes: fixed-sample
+Garment-DINO reached `0.916`, head-five-point distance reached `0.012`, and
+the garment curve was still rising. The only unresolved route was hair. The
+read-only gate inspection is recorded in
+`docs/results/hair_gate_step2000_diagnosis.md` and concluded `INCONCLUSIVE`:
+the gate is in the `condition_gates_fp32` optimizer group at exactly `10x`
+LR, its real-batch gradient is finite and nonzero, the projected token slice is
+present after LayerNorm, but the checkpoint value remains `0.100031823`.
+
+The continuation config is
+`configs/spatial_warmup_resume_hair_incontext.yaml`. It keeps the garment and
+head paths unchanged and adds a hair-only in-context latent segment:
+
+```text
+[image 3072 | garment reference 3072 | hair reference 3072]
+```
+
+The hair reference contains only FASHN label 2 at native `768x1024`; all other
+pixels are neutral gray. It is VAE-encoded into `hair_ref_latents`, uses a
+separate `y+64` image-ID offset, receives no ControlNet residual, and does not
+participate in flow loss. The old hair-token parameters remain in the graph so
+the step-2000 Adam state restores exactly, but their condition signal is off by
+default. Hair-DINO supervision now uses `lambda_hair=0.5` every second eligible
+optimizer step in the tau window `[0.35, 0.70]`.
+
+The complete 9216-token step, including differentiable VAE decode, frozen DINO,
+backward, and optimizer update, peaks at `43.634 GiB` and takes `10.03 s` on an
+A6000. It passes the 44 GiB gate, so both garment and hair references remain at
+full token resolution. See
+`docs/results/vram_report_hair_incontext_768x1024.md`.
+The deliberately conservative all-heavy-step bound is `8.36 h` from step 2000
+to 2500 and `40.12 h` to step 4400; the first 20 formal optimizer steps write a
+mixed-workload estimate to `logs/benchmark.json`.
+The required 20-step smoke completed from step 2000 to 2020 at `43.712 GiB`,
+`10.102 s/step`, with the Hair-DINO decode path active and a `10%` skip rate.
+
+Run the incremental cache upgrade and smoke test before formal continuation:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 /home/muxiangyu/miniconda3/envs/refton_m2h/bin/python \
+  -m torch.distributed.run --standalone --nproc_per_node=4 build_cache.py \
+  --config configs/spatial_warmup_resume_hair_incontext.yaml \
+  --split train,val,test --keys hair_ref_latents,hair_ref_empty
+
+CUDA_VISIBLE_DEVICES=0 /home/muxiangyu/miniconda3/envs/refton_m2h/bin/python \
+  train_paired.py --config configs/spatial_warmup_resume_hair_incontext.yaml \
+  --dev-single-gpu --allow-partial-cache --smoke-steps 20 \
+  --override-output-id spatial_hair_incontext_smoke20
+```
+
+After the smoke succeeds, launch GPU0-2 training and the GPU3 watcher together:
+
+```bash
+bash scripts/run_spatial_hair_incontext_resume.sh
+```
+
+On its first launch, the script recomputes step 2000 with the new route and the
+same ten visible-hair validation samples used by later checkpoints. This avoids
+turning the old `6 valid / 4 no_hair` sample mix into a false Hair-DINO or LAB
+slope. The one-off baseline uses GPU3 while continuation training starts on
+GPU0-2; the persistent checkpoint watcher takes GPU3 after baseline completion.
+Because the appended hair segment is untrained at this point, step 2000 records
+its zero-step impact but does not fire post-training garment/head guards. Those
+absolute guards begin at step 2500; the audited first attempt that applied them
+to the baseline is retained under the non-`v2` run ID.
+
+The final evaluation can wait in a separate terminal; it refuses to run after
+any watcher stop and writes only continuation-specific generation/metric paths:
+
+```bash
+bash scripts/run_spatial_hair_incontext_finalize.sh
+```
+
+The corrected trajectory gate treats garment response concentration as a
+descriptive probe only. Garment stopping now follows Garment-DINO decline or a
+human `VISUAL_REGRESSION` marker. At step 2500, inspect Hair-DINO slope,
+Hair-LAB distance slope, and `hair_ref_swap_concentration` first. Step 3000 is
+the hair hard gate: it stops only when Hair-DINO is flat and LAB distance is not
+falling. Garment-DINO `>=0.90`, head-five-point distance `<=0.02`, 100% face
+detection, and the baseline-bound identity-swap cosine remain immediate guards.
 
 ## PuLID Assets
 

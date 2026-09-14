@@ -1,0 +1,69 @@
+extends: warmup.yaml
+
+metrics_v2:
+  version: 2.1.0
+  seed: 20260817
+  output_root: eval/metrics_v2
+  default_runs: [a4, b2cont]
+  compare_runs: [a4, b2cont]
+  runs:
+    a4:
+      label: A4
+      gen_dir: eval/a4_gen
+      legacy_metrics_dir: eval/a4_metrics
+    b2cont:
+      label: B2-cont
+      gen_dir: eval/b2cont_gen
+      legacy_metrics_dir: eval/b2cont_metrics
+  parsing:
+    model_dir: /data/muxiangyu/pythonPrograms/M2HImage/models/hf/fashn-ai/fashn-human-parser
+    labels_json: human_parsing/fashn/metadata/labels.json
+    input_width: 384
+    input_height: 576
+    batch_size: 4
+    hair_label: 2
+    garment_labels: [3, 4, 5, 6, 7, 10]
+    min_garment_area_fraction: 0.005
+    min_hair_area_fraction: 0.01
+  dino:
+    name: GSVTON DINOv2 ViT-B/14
+    repo_root: /data/muxiangyu/pythonPrograms/GSVTON
+    checkpoint: /data/muxiangyu/pythonPrograms/GSVTON/pretrained/dinov2_vitb14_pretrain.pth
+    image_size: 518
+    mask_out_value: 0.5
+  garment_hf:
+    # High-pass LPIPS is evaluated after the masked garment bbox crop.
+    sigma: 2.0
+    crop_size: 256
+    # Print/logo candidates are dense high-gradient connected components found
+    # mechanically on the source mannequin garment, never selected by run score.
+    print_gradient_percentile: 90.0
+    print_density_kernel: 25
+    print_density_threshold: 0.15
+    print_min_component_fraction: 0.0002
+    print_max_component_fraction: 0.05
+    print_bbox_pad: 12
+    print_panel_cases: 16
+    print_panel_tile_size: 180
+  pose:
+    helper_python: /home/muxiangyu/miniconda3/envs/StableAnimator/bin/python
+    repo_root: /data/muxiangyu/pythonPrograms/StableAnimator/DWPose
+    detector_checkpoint: /data/muxiangyu/pythonPrograms/StableAnimator/checkpoints/DWPose/yolox_l.onnx
+    pose_checkpoint: /data/muxiangyu/pythonPrograms/StableAnimator/checkpoints/DWPose/dw-ll_ucoco_384.onnx
+    provider: CUDAExecutionProvider
+    score_threshold: 0.3
+    body_indices: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    head_indices: [0, 14, 15, 16, 17]
+  identity:
+    expected_adaface_hash: f2eb07d03de0
+  distribution:
+    rng_seed: 20260817
+    kid_subsets: 50
+    kid_subset_size: 400
+    feature_layer_fid: 2048
+  panels:
+    seed: 20260817
+    mid_count: 8
+    identities_per_mid: 2
+    tile_width: 288
+    tile_height: 384

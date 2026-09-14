@@ -1,0 +1,27 @@
+extends: spatial_hair_ab_semantic.yaml
+
+experiment:
+  id: phase1_spatial_c_a4prime_semantic_r16_12400_768x1024
+  wandb_run_id: phase1_spatial_c_a4prime_semantic_r16_12400_768x1024
+
+training:
+  total_steps: 12400
+  additional_steps: null
+  resume: /data/muxiangyu/datasets/M2HImage/M2H_Final_v2/phase1/phase1_spatial_hair_ab_semantic_r16_8400_768x1024/checkpoints/final
+  differential:
+    enabled: true
+    sampling: semihard
+
+eval:
+  b2_output_dir: eval/spatial_c_a4prime_semantic_gen
+  report_path: eval/spatial_c_a4prime_semantic_report.md
+  response_track:
+    output_dir: artifacts/response_track_spatial_c_a4prime_semantic
+    baseline_snapshot: artifacts/hair_ab_fixed_set/semantic/step8400.json
+    required_history_steps: [8400]
+    trend_gate_steps: [8900, 9400, 9900, 10400, 10900, 11400, 11900, 12400]
+    hard_stop_step: 999999
+    hair_hard_stop_step: 999999
+
+metrics:
+  output_dir: eval/spatial_c_a4prime_semantic_legacy_metrics

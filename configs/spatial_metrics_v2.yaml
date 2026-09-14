@@ -1,0 +1,39 @@
+extends: metrics_v2.yaml
+
+metrics_v2:
+  # Evaluate only the repaired run by default, then pair it against the frozen A4 baseline.
+  default_runs: [spatial]
+  compare_runs: [spatial, a4]
+  runs:
+    spatial_quality_repair:
+      label: Spatial quality repair r16
+      gen_dir: eval/spatial_quality_repair_gen
+      legacy_metrics_dir: eval/spatial_quality_repair_legacy_metrics
+    spatial_hair_incontext_fixedset:
+      label: Spatial hair in-context fixed-set continuation
+      gen_dir: eval/b2p_spatial_hair_incontext_fixedset_gen
+      legacy_metrics_dir: eval/b2p_spatial_hair_incontext_fixedset_metrics
+    spatial_hair_incontext:
+      label: Spatial hair in-context continuation
+      gen_dir: eval/b2p_spatial_hair_incontext_gen
+      legacy_metrics_dir: eval/b2p_spatial_hair_incontext_metrics
+    spatial_hair_region:
+      label: Spatial hair/region continuation
+      gen_dir: eval/b2p_spatial_hair_region_gen
+      legacy_metrics_dir: eval/b2p_spatial_hair_region_metrics
+    spatial:
+      label: Spatial-repair B2'
+      gen_dir: eval/b2p_spatial_gen
+      legacy_metrics_dir: eval/b2p_spatial_metrics
+    spatial_a2:
+      label: Spatial A2
+      gen_dir: eval/spatial_a2_gen
+      legacy_metrics_dir: eval/spatial_a2_metrics
+    spatial_b2cont:
+      label: Spatial B2-cont
+      gen_dir: eval/spatial_b2cont_gen
+      legacy_metrics_dir: eval/spatial_b2cont_metrics
+    spatial_a4:
+      label: Spatial A4
+      gen_dir: eval/spatial_a4_gen
+      legacy_metrics_dir: eval/spatial_a4_metrics

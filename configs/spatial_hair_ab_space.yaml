@@ -1,0 +1,57 @@
+extends: spatial_quality_repair_resume.yaml
+
+# Part B control: preserve the current 768-token spatial hair reference.
+experiment:
+  id: phase1_spatial_hair_ab_space_r16_8400_768x1024
+  wandb_run_id: phase1_spatial_hair_ab_space_r16_8400_768x1024
+
+model:
+  identity_adapter:
+    use_hair_tokens: false
+    hair_token_mode: dense_with_position
+    hair_semantic_max_tokens: 32
+    retain_legacy_hair_parameters_for_resume: true
+  spatial_conditions:
+    hair:
+      enabled: true
+      reference:
+        enabled: true
+        stride: 2
+        y_offset: 64
+
+training:
+  # Both B branches resume step 6400 and execute exactly 2000 optimizer steps.
+  total_steps: 8400
+  additional_steps: null
+  resume: /data/muxiangyu/datasets/M2HImage/M2H_Final_v2/phase1/phase1_spatial_quality_repair_r16_6400_768x1024/checkpoints/final
+  checkpoint_every: 500
+  hair_ab:
+    preregistered_before_training: true
+    spatial_control: true
+    semantic_hair_tolerance: 0.02
+    sim_target_min_gain: 0.02
+    garment_dino_tolerance: 0.005
+    head5_tolerance: 0.002
+    face_occlusion_test: paired_mcnemar_less
+    alpha: 0.05
+    semantic_gate_min_shift: 0.01
+    semantic_failure_hair_dino: 0.60
+
+eval:
+  b2_output_dir: eval/spatial_hair_ab_space_gen
+  report_path: eval/spatial_hair_ab_space_report.md
+  manual_review_step: 0
+  response_track:
+    enabled: true
+    output_dir: artifacts/response_track_hair_ab_space
+    baseline_snapshot: artifacts/hair_ab_fixed_set/current/step6400.json
+    historical_snapshots: []
+    required_history_steps: [6400]
+    auto_backfill: false
+    trend_gate_steps: [6900, 7400, 7900, 8400]
+    # Equal-step A/B fairness takes priority over an early plateau stop.
+    hard_stop_step: 999999
+    hair_hard_stop_step: 999999
+
+metrics:
+  output_dir: eval/spatial_hair_ab_space_legacy_metrics

@@ -1,0 +1,68 @@
+extends: spatial_warmup.yaml
+
+experiment:
+  id: phase1_spatial_hair_region_resume_r16_4400_768x1024
+  wandb_run_id: phase1_spatial_hair_region_resume_r16_4400_768x1024
+
+model:
+  # Required for the sparse differentiable paired hair objective.
+  load_vae_in_train: true
+  identity_adapter:
+    # The three active scalar gates remain separate fp32 optimizer parameters.
+    gate_lr_mult: 10.0
+
+training:
+  total_steps: 4400
+  additional_steps: null
+  resume: /data/muxiangyu/datasets/M2HImage/M2H_Final_v2/phase1/phase1_spatial_conditions_r16_4400_768x1024/checkpoints/step-000500
+  paired_region_weighting:
+    enabled: true
+    w_cloth: 2.0
+    w_hair: 2.0
+  hair_loss:
+    enabled: true
+    mask_source: target_projection
+    decode_freq: 3
+    tau_min: 0.35
+    tau_max: 0.70
+    lambda_hair: 0.10
+    compensate_grad_accum: true
+    parser_model_dir: /data/muxiangyu/pythonPrograms/M2HImage/models/hf/fashn-ai/fashn-human-parser
+    parser_input_width: 384
+    parser_input_height: 576
+    hair_label: 2
+    min_hair_area_fraction: 0.01
+    dino_repo_root: /data/muxiangyu/pythonPrograms/GSVTON
+    dino_checkpoint: /data/muxiangyu/pythonPrograms/GSVTON/pretrained/dinov2_vitb14_pretrain.pth
+    dino_image_size: 518
+    gradient_checkpointing: true
+    log_window_steps: 100
+
+eval:
+  b2_output_dir: eval/b2p_spatial_hair_region_gen
+  report_path: eval/b2p_spatial_hair_region_report.md
+  fixed_val_count: 10
+  # The rejected step-500 manual gate is replaced by checkpoint-trajectory rules.
+  manual_review_step: 0
+  response_track:
+    enabled: true
+    output_dir: artifacts/response_track
+    metrics_config: configs/spatial_metrics_v2.yaml
+    sample_count: 6
+    metric_sample_count: 10
+    taus: [0.3, 0.5, 0.7]
+    seed: 20260817
+    trend_gate_steps: [1000, 1500]
+    hard_stop_step: 2000
+    concentration_min_delta: 0.05
+    concentration_uniform_max: 1.10
+    hair_min_delta: 0.05
+    hair_min_ratio: 0.50
+    dino_positive_slope: 0.0
+    dino_plateau_slope: 0.001
+    min_face_detection_rate: 0.95
+    max_swap_cosine: 0.85
+    pose_provider: CPUExecutionProvider
+
+metrics:
+  output_dir: eval/b2p_spatial_hair_region_metrics

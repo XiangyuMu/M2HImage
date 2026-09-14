@@ -362,6 +362,7 @@ class FluxConditionAdapter(nn.Module):
         hair_ref_tokens: torch.Tensor | None = None,
         hair_ref_positions: torch.Tensor | None = None,
         hair_ref_mask: torch.Tensor | None = None,
+        route_scales: dict[str, torch.Tensor] | None = None,
     ) -> torch.Tensor:
         b = appearance.shape[0]
         app_tokens = self.app_proj(appearance).view(b, self.appearance_tokens, self.token_dim)
@@ -413,7 +414,27 @@ class FluxConditionAdapter(nn.Module):
             self.norm(torch.cat([tokens for tokens, _, _ in routes], dim=1)), sizes, dim=1
         )
         gated_parts = []
-        for tokens, (_, gate, valid) in zip(normalized, routes, strict=True):
+        for tokens, (route_name, gate, valid) in zip(
+            normalized,
+            (
+                ('appearance', self.appearance_gate, None),
+                *(
+                    [('garment', self.garment_gate, None)]
+                    if self.use_legacy_garment_tokens else []
+                ),
+                *(
+                    [('hair', self.hair_gate, valid)]
+                    if self.use_hair_tokens else []
+                ),
+                ('pose', self.pose_gate, None),
+            ),
+            strict=True,
+        ):
+            scale = None if route_scales is None else route_scales.get(route_name)
+            if scale is not None:
+                while scale.ndim < tokens.ndim:
+                    scale = scale.unsqueeze(-1)
+                tokens = tokens * scale.to(device=tokens.device, dtype=tokens.dtype)
             tokens = self._apply_gate(tokens, gate)
             if valid is not None:
                 tokens = tokens * valid.to(device=tokens.device, dtype=tokens.dtype)

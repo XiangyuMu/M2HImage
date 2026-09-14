@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "M2H role-selective experiment metrics manifest",
+  "type": "object",
+  "required": ["experiment", "commit", "dataset", "metrics", "runtime"],
+  "properties": {
+    "experiment": {
+      "type": "object",
+      "required": ["name", "config", "method"],
+      "properties": {
+        "name": {"type": "string"},
+        "config": {"type": "string"},
+        "method": {"enum": ["A", "B", "C"]}
+      },
+      "additionalProperties": true
+    },
+    "commit": {"type": "string"},
+    "dataset": {
+      "type": "object",
+      "required": ["root", "split_manifest", "split_version"],
+      "properties": {
+        "root": {"type": "string"},
+        "split_manifest": {"type": "string"},
+        "split_version": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "metrics": {
+      "type": "object",
+      "required": [
+        "id_cosine", "tar_at_1e-3", "garment_dino", "garment_iou",
+        "pose_pck", "bg_ssim", "bg_lpips", "fid"
+      ],
+      "properties": {
+        "id_cosine": {"type": ["number", "null"]},
+        "tar_at_1e-3": {"type": ["number", "null"]},
+        "garment_dino": {"type": ["number", "null"]},
+        "garment_iou": {"type": ["number", "null"]},
+        "pose_pck": {"type": ["number", "null"]},
+        "bg_ssim": {"type": ["number", "null"]},
+        "bg_lpips": {"type": ["number", "null"]},
+        "fid": {"type": ["number", "null"]}
+      },
+      "additionalProperties": true
+    },
+    "runtime": {
+      "type": "object",
+      "required": ["gpu_count", "wall_clock_seconds"],
+      "properties": {
+        "gpu_count": {"type": "integer", "minimum": 1},
+        "wall_clock_seconds": {"type": ["number", "null"], "minimum": 0}
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

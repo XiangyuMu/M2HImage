@@ -83,6 +83,9 @@ class WarmupFlowModel(torch.nn.Module):
         self.pair_region_weighting_enabled = bool(
             self.pair_region_cfg.get('enabled', False)
         )
+        self.experiment_cfg = cfg.get('experiment_method', {})
+        self.experiment_name = str(self.experiment_cfg.get('name', 'baseline')).lower()
+        self.async_flow_enabled = self.experiment_name in {'c', 'async_flow', 'async'}
         if self.reference_stride < 1:
             raise ValueError(f'garment reference stride must be >=1, got {self.reference_stride}')
         if self.hair_reference_stride < 1:
@@ -113,8 +116,50 @@ class WarmupFlowModel(torch.nn.Module):
                 tau = tau.expand(z0.shape[0])
             if tau.shape[0] != z0.shape[0]:
                 raise RuntimeError(f'tau_override batch={tau.shape[0]}, expected {z0.shape[0]}')
-        z_tau = (1.0 - tau.view(-1, 1, 1)) * z0 + tau.view(-1, 1, 1) * z1
-        target_v = z1 - z0
+        tau_image = tau.view(-1, 1, 1)
+        if self.async_flow_enabled:
+            required = ('cloth_safe_z', 'hair_z', 'face_z')
+            missing = [key for key in required if key not in batch]
+            if missing:
+                raise RuntimeError(f'async flow requires token masks {missing}')
+            cloth = batch['cloth_safe_z'].to(device=device, dtype=dtype).clamp(0.0, 1.0)
+            hair = batch['hair_z'].to(device=device, dtype=dtype).clamp(0.0, 1.0)
+            face = batch['face_z'].to(device=device, dtype=dtype).clamp(0.0, 1.0)
+            if cloth.ndim != 2 or cloth.shape[:2] != z0.shape[:2]:
+                raise RuntimeError(
+                    f'async flow mask shape={tuple(cloth.shape)} must match latent tokens={tuple(z0.shape[:2])}'
+                )
+            identity = torch.maximum(face, hair)
+            garment = cloth
+            background = (1.0 - torch.maximum(garment, identity)).clamp(0.0, 1.0)
+            gamma = self.experiment_cfg.get('region_gamma', {})
+            gamma_bg = float(gamma.get('background', 2.0))
+            gamma_garment = float(gamma.get('garment', 2.0))
+            gamma_boundary = float(gamma.get('boundary', 1.0))
+            gamma_identity = float(gamma.get('identity', 0.7))
+            if min(gamma_bg, gamma_garment, gamma_boundary, gamma_identity) <= 0.0:
+                raise ValueError('async flow region gamma values must be positive')
+            # Boundary receives an intermediate schedule where cloth and identity overlap.
+            overlap = (garment * identity).clamp(0.0, 1.0)
+            garment_interior = (garment - overlap).clamp(0.0, 1.0)
+            identity_only = (identity - overlap).clamp(0.0, 1.0)
+            beta = (
+                background * tau[:, None].pow(gamma_bg)
+                + garment_interior * tau[:, None].pow(gamma_garment)
+                + overlap * tau[:, None].pow(gamma_boundary)
+                + identity_only * tau[:, None].pow(gamma_identity)
+            ).unsqueeze(-1)
+            dbeta = (
+                background * gamma_bg * tau[:, None].clamp_min(1e-6).pow(gamma_bg - 1.0)
+                + garment_interior * gamma_garment * tau[:, None].clamp_min(1e-6).pow(gamma_garment - 1.0)
+                + overlap * gamma_boundary * tau[:, None].clamp_min(1e-6).pow(gamma_boundary - 1.0)
+                + identity_only * gamma_identity * tau[:, None].clamp_min(1e-6).pow(gamma_identity - 1.0)
+            ).unsqueeze(-1)
+            z_tau = (1.0 - beta) * z0 + beta * z1
+            target_v = dbeta * (z1 - z0)
+        else:
+            z_tau = (1.0 - tau_image) * z0 + tau_image * z1
+            target_v = z1 - z0
         prompt = batch['prompt_embeds'].to(device=device, dtype=dtype)
         pooled = batch['pooled_prompt_embeds'].to(device=device, dtype=dtype)
         if prompt.ndim == 2:
@@ -128,6 +173,7 @@ class WarmupFlowModel(torch.nn.Module):
             'z_tau': z_tau,
             'target_v': target_v,
             'tau': tau,
+            'async_flow': torch.tensor(float(self.async_flow_enabled), device=device),
             'prompt': prompt,
             'pooled': pooled,
             'img_ids': img_ids,
@@ -144,6 +190,7 @@ class WarmupFlowModel(torch.nn.Module):
         hair_ref_tokens: torch.Tensor | None = None,
         hair_ref_positions: torch.Tensor | None = None,
         hair_ref_mask: torch.Tensor | None = None,
+        tau: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if self.hair_enabled:
             adapter_tokens = self.adapter(
@@ -153,10 +200,26 @@ class WarmupFlowModel(torch.nn.Module):
                 hair_ref_tokens=hair_ref_tokens,
                 hair_ref_positions=hair_ref_positions,
                 hair_ref_mask=hair_ref_mask,
+                route_scales=self._route_scales(tau),
             )
         else:
-            adapter_tokens = self.adapter(appearance, garment, head_pose)
+            adapter_tokens = self.adapter(
+                appearance,
+                garment,
+                head_pose,
+                route_scales=self._route_scales(tau),
+            )
         return torch.cat([prompt, adapter_tokens], dim=1)
+
+    def _route_scales(self, tau: torch.Tensor | None) -> dict[str, torch.Tensor] | None:
+        if self.experiment_name not in {'a', 'b', 'c', 'async_flow', 'async'} or tau is None:
+            return None
+        # Early flow steps preserve mannequin geometry/garment; late steps resolve identity.
+        t = tau.float().clamp(0.0, 1.0)
+        identity = 0.65 + 0.70 * (1.0 - t)
+        garment = 1.20 - 0.25 * (1.0 - t)
+        pose = 1.15 - 0.15 * (1.0 - t)
+        return {'appearance': identity, 'garment': garment, 'pose': pose}
 
     def _hair_inputs(
         self,
@@ -471,6 +534,7 @@ class WarmupFlowModel(torch.nn.Module):
             batch['garment'].to(device=device, dtype=dtype),
             batch['head_pose'].to(device=device, dtype=dtype),
             *hair_inputs,
+            tau=flow['tau'],
         )
         cn_samples = self._controlnet_forward(
             flow['z_tau'],
@@ -716,6 +780,7 @@ class DifferentialFlowModel(WarmupFlowModel):
             garment,
             head_pose,
             *paired_hair,
+            tau=flow['tau'],
         )
         # ControlNet is identity-independent in A2: it sees pose, prompt, z_tau, and tau only.
         # Reusing these samples is invalid if a future method injects identity into ControlNet.
@@ -769,6 +834,7 @@ class DifferentialFlowModel(WarmupFlowModel):
                 garment,
                 head_pose,
                 *hair_j,
+                tau=flow['tau'],
             )
             tokens_k = self._condition_tokens(
                 flow['prompt'],
@@ -776,6 +842,7 @@ class DifferentialFlowModel(WarmupFlowModel):
                 garment,
                 head_pose,
                 *hair_k,
+                tau=flow['tau'],
             )
             pred_j = self._transformer_forward(
                 flow['z_tau'],

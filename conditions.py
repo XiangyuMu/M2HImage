@@ -414,21 +414,14 @@ class FluxConditionAdapter(nn.Module):
             self.norm(torch.cat([tokens for tokens, _, _ in routes], dim=1)), sizes, dim=1
         )
         gated_parts = []
-        for tokens, (route_name, gate, valid) in zip(
-            normalized,
-            (
-                ('appearance', self.appearance_gate, None),
-                *(
-                    [('garment', self.garment_gate, None)]
-                    if self.use_legacy_garment_tokens else []
-                ),
-                *(
-                    [('hair', self.hair_gate, valid)]
-                    if self.use_hair_tokens else []
-                ),
-                ('pose', self.pose_gate, None),
-            ),
-            strict=True,
+        route_names = ['appearance']
+        if self.use_legacy_garment_tokens:
+            route_names.append('garment')
+        if self.use_hair_tokens:
+            route_names.append('hair')
+        route_names.append('pose')
+        for tokens, (route_name, (_, gate, valid)) in zip(
+            normalized, zip(route_names, routes, strict=True), strict=True
         ):
             scale = None if route_scales is None else route_scales.get(route_name)
             if scale is not None:

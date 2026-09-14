@@ -13,7 +13,7 @@ data:
   train_split: splits_person_disjoint_final/train.txt
   val_split: splits_person_disjoint_final/val.txt
   test_split: splits_person_disjoint_final/test.txt
-  cache_dir: /data/muxiangyu/experiments/M2H_Final_v2_clean_v1/cache_m_only
+  cache_dir: /data/muxiangyu/datasets/M2HImage/M2H_Final_v2/phase1/cache_spatial_768x1024
   cf_subset: eval/cf_subset.json
   resolution:
     width: 768

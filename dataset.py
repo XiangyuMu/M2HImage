@@ -24,6 +24,7 @@ SPATIAL_HAIR_KEYS = SPATIAL_HAIR_TOKEN_KEYS
 SAMPLE_CACHE_KEYS = BASE_SAMPLE_CACHE_KEYS
 TEXT_CACHE_KEYS = ('prompt_embeds', 'pooled_prompt_embeds')
 DIFFERENTIAL_MASK_KEYS = ('cloth_safe_z', 'body_bg_z', 'face_z')
+ASYNC_FLOW_MASK_KEYS = ('cloth_safe_z', 'hair_z', 'face_z')
 PAIRED_REGION_MASK_KEYS = ('cloth_safe_z', 'hair_z', 'face_z')
 
 
@@ -304,6 +305,12 @@ class PairedWarmupDataset(Dataset):
             )
         differential = config.get('training', {}).get('differential', {})
         self.differential_enabled = bool(differential.get('enabled', False)) and split == 'train'
+        experiment_name = str(
+            config.get('experiment_method', {}).get('name', 'baseline')
+        ).lower()
+        self.async_flow_enabled = (
+            experiment_name in {'c', 'async_flow', 'async'} and split == 'train'
+        )
         pair_region = config.get('training', {}).get('paired_region_weighting', {})
         hair_loss = config.get('training', {}).get('hair_loss', {})
         self.paired_region_weighting_enabled = (
@@ -315,6 +322,8 @@ class PairedWarmupDataset(Dataset):
         self.region_mask_keys = set()
         if self.differential_enabled:
             self.region_mask_keys.update(DIFFERENTIAL_MASK_KEYS)
+        if self.async_flow_enabled:
+            self.region_mask_keys.update(ASYNC_FLOW_MASK_KEYS)
         if self.paired_region_weighting_enabled or self.paired_hair_loss_enabled:
             self.region_mask_keys.update(PAIRED_REGION_MASK_KEYS)
         self.differential_sampling = str(differential.get('sampling', 'random')).lower()

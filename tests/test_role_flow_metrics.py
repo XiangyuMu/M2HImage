@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from dataset import ASYNC_FLOW_MASK_KEYS, PairedWarmupDataset
 from tools.evaluate_role_flow import (
     METRIC_NAMES,
     _normalise_row,
@@ -92,3 +93,24 @@ def test_metric_contract_has_exact_eight_metrics() -> None:
         "bg_lpips",
         "fid",
     )
+
+
+def test_async_flow_dataset_requests_all_required_region_masks(tmp_path: Path) -> None:
+    (tmp_path / "train.txt").write_text("00001\n", encoding="utf-8")
+    cfg = {
+        "experiment": {"seed": 0},
+        "experiment_method": {"name": "C"},
+        "data": {
+            "root": str(tmp_path),
+            "train_split": "train.txt",
+            "cache_dir": "cache",
+            "resolution": {"width": 768, "height": 1024},
+        },
+        "model": {},
+        "training": {},
+    }
+
+    dataset = PairedWarmupDataset(cfg, "train", require_coverage=False)
+
+    assert dataset.async_flow_enabled
+    assert dataset.region_mask_keys == set(ASYNC_FLOW_MASK_KEYS)

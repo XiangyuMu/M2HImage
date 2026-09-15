@@ -23,7 +23,7 @@ data:
     skin and hair
 model:
   base: /data/muxiangyu/pythonPrograms/M2HImage/models/hf/black-forest-labs/FLUX.1-dev
-  controlnet: /data/muxiangyu/pythonPrograms/M2HImage/models/hf/black-forest-labs/FLUX.1-dev-Controlnet-Union
+  controlnet: /data/muxiangyu/pythonPrograms/M2HImage/models/hf/InstantX/FLUX.1-dev-Controlnet-Union
   control_mode: 4
   controlnet_scale: 0.75
   local_files_only: true

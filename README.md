@@ -103,6 +103,37 @@ The final trainable checkpoint for each run is under its `checkpoints/final/` di
 7. Read `eval/weight_interp_report.md` and `eval/identity_interp_report.md` before proposing another inference intervention. Their fixed verdicts are `NON-LINEAR` and `EQUAL`; neither changes the A4 `MIXED` verdict.
 8. If research resumes, begin with a written new hypothesis and preregistered comparator. The current A2/A4 mechanism sequence is closed; no post-hoc lambda tuning should be reported as the same experiment.
 
+## Clean role-flow evaluation
+
+Build one frozen evaluation manifest from the person-disjoint clean split. The
+manifest contains val and test pairs, absolute read-only human/mannequin source
+paths, source SHA-256 values, source keys, and person-cluster provenance. It
+uses the existing `role_test_subset.json` for test pairs when available and a
+deterministic sorted fallback otherwise.
+
+```bash
+python tools/build_role_flow_eval_manifest.py \
+  --dataset-root /data/muxiangyu/datasets/M2HImage/M2H_Final_v2_clean_v1 \
+  --experiment-root /data/muxiangyu/experiments/M2H_Final_v2_clean_v1 \
+  --output /data/muxiangyu/experiments/M2H_Final_v2_clean_v1/role_flow/eval_manifest.json
+```
+
+Generate images with the same manifest for A, B, and C. `--dry-run` checks
+source images and cache coverage without loading FLUX.
+
+```bash
+python tools/generate_role_flow_eval.py \
+  --checkpoint /path/to/checkpoints/final \
+  --config configs/role_selective/A_timestep_routed.yaml \
+  --manifest /data/muxiangyu/experiments/M2H_Final_v2_clean_v1/role_flow/eval_manifest.json \
+  --output-dir /data/muxiangyu/experiments/M2H_Final_v2_clean_v1/role_flow/eval/A_timestep_routed/generated_final \
+  --device cuda:0
+```
+
+Use `tools/evaluate_role_flow.py` with the same manifest and `--split test`
+for final held-out metrics; use `--calibration-split val` for threshold
+calibration. The generator does not modify the original dataset.
+
 ## Critical Notes
 
 - Fixed on 2026-07-07: custom FLUX training/inference paths pass timestep `tau` in `[0,1]` to `FluxTransformer2DModel` and `FluxControlNetModel`. Diffusers internally multiplies by 1000.

@@ -95,19 +95,53 @@ def _summary(values: Iterable[Any], failed: int = 0) -> dict[str, Any]:
     }
 
 
-def _read_rows(path: str | Path) -> list[dict[str, Any]]:
+def _read_manifest_payload(path: str | Path) -> dict[str, Any]:
     value = Path(path)
     if value.suffix.lower() == ".csv":
         with value.open("r", encoding="utf-8", newline="") as handle:
-            return [dict(row) for row in csv.DictReader(handle)]
+            return {"rows": [dict(row) for row in csv.DictReader(handle)], "provenance": {}}
     payload = json.loads(value.read_text(encoding="utf-8"))
     if isinstance(payload, list):
-        return [dict(row) for row in payload]
+        return {"rows": payload, "provenance": {}}
     if isinstance(payload, dict):
         rows = payload.get("rows", payload.get("pairs"))
         if isinstance(rows, list):
-            return [dict(row) for row in rows]
+            return {**payload, "rows": rows}
     raise ValueError(f"evaluation manifest must contain a list or rows field: {value}")
+
+
+def _read_rows(path: str | Path) -> list[dict[str, Any]]:
+    return [dict(row) for row in _read_manifest_payload(path)["rows"]]
+
+
+def resolve_asset_root(manifest: str | Path, dataset_root: str | Path, asset_root: str | Path | None = None) -> Path:
+    if asset_root is not None and str(asset_root).strip():
+        return Path(asset_root).expanduser()
+    provenance = _read_manifest_payload(manifest).get("provenance", {})
+    if isinstance(provenance, dict):
+        source_root = str(provenance.get("read_only_source_root", "")).strip()
+        if source_root:
+            return Path(source_root).expanduser()
+    return Path(dataset_root).expanduser()
+
+
+def _asset_root(cfg: dict[str, Any]) -> Path:
+    data = cfg.get("data", {})
+    return Path(data.get("asset_root") or data["root"]).expanduser()
+
+
+def _cfg_with_data_root(cfg: dict[str, Any], root: str | Path) -> dict[str, Any]:
+    updated = dict(cfg)
+    updated["data"] = {**cfg.get("data", {}), "root": str(root)}
+    return updated
+
+
+def _face_crop_path(cfg: dict[str, Any], sample_id: str) -> Path:
+    return _find_image(_asset_root(cfg) / "derived/face_crops/human", sample_id)
+
+
+def _dwpose_target_path(cfg: dict[str, Any], mid: str) -> Path:
+    return _asset_root(cfg) / "dwpose/keypoints/mannequin" / f"{mid}.npz"
 
 
 def _normalise_row(row: dict[str, Any], generated_dir: Path, dataset_root: Path) -> dict[str, Any]:
@@ -236,7 +270,7 @@ def _load_mask(path: Path, size: tuple[int, int] | None = None) -> np.ndarray:
 def _source_garment_mask(cfg: dict[str, Any], mid: str, size: tuple[int, int]) -> np.ndarray:
     from metrics_v2.parsing import source_garment_mask
 
-    return source_garment_mask(cfg, mid, size)
+    return source_garment_mask(_cfg_with_data_root(cfg, _asset_root(cfg)), mid, size)
 
 
 def _run_garment_and_parsing(
@@ -259,7 +293,8 @@ def _run_garment_and_parsing(
         try:
             generated = read_rgb(row["generated_path"], size)
             mannequin = read_rgb(row["mannequin_path"], size)
-            generated_mask, _, _ = load_generated_masks(cfg, out_dir, {"mid": row["mid"], "path": Path(row["generated_path"])})
+            source_cfg = _cfg_with_data_root(cfg, _asset_root(cfg))
+            generated_mask, _, _ = load_generated_masks(source_cfg, out_dir, {"mid": row["mid"], "path": Path(row["generated_path"])})
             source_mask = _source_garment_mask(cfg, row["mid"], size)
             if row["mid"] not in source_features:
                 source_features[row["mid"]] = extractor.dino_feature(mannequin, source_mask)
@@ -313,7 +348,6 @@ def _embed_rows(cfg: dict[str, Any], rows: list[dict[str, Any]], device: str) ->
     from metrics.heldout_id import resize_face_crop_rgb
 
     recognizer, detector = _load_adaface(cfg, device)
-    root = Path(cfg["data"]["root"])
     mcfg = cfg["metrics"]["heldout_id"]
     generated: dict[tuple[str, str, int], np.ndarray] = {}
     refs: dict[str, np.ndarray] = {}
@@ -322,7 +356,7 @@ def _embed_rows(cfg: dict[str, Any], rows: list[dict[str, Any]], device: str) ->
     def ref_embedding(sample_id: str) -> np.ndarray:
         if sample_id in refs:
             return refs[sample_id]
-        face_path = _find_image(root / "derived/face_crops/human", sample_id)
+        face_path = _face_crop_path(cfg, sample_id)
         try:
             aligned, _, _ = detector.align(face_path, expand=float(mcfg.get("ref_expand", 1.1)), min_crop=int(mcfg.get("min_crop_px", 256)))
         except RuntimeError as exc:
@@ -459,14 +493,13 @@ def _pose_pck(cfg: dict[str, Any], rows: list[dict[str, Any]], out_dir: Path, de
     threshold = float(pcfg.get("score_threshold", 0.3))
     pck_threshold = 0.05
     result: dict[tuple[str, str, int], dict[str, Any]] = {}
-    root = Path(cfg["data"]["root"])
     for row in rows:
         key = (row["mid"], row["jid"], row["seed"])
         try:
             pred = predictions[_prediction_key({"mid": row["mid"], "jid": row["jid"], "seed": row["seed"]})]
             if pred.get("status") != "ok":
                 raise RuntimeError(pred.get("error", "DWPose failed"))
-            target_path = root / "dwpose/keypoints/mannequin" / f"{row['mid']}.npz"
+            target_path = _dwpose_target_path(cfg, row["mid"])
             with np.load(target_path) as target:
                 target_body = np.asarray(target["body"], dtype=np.float32)
                 target_scores = np.asarray(target["body_scores"], dtype=np.float32)
@@ -532,12 +565,15 @@ def evaluate(
     calibration_split: str = "val",
     device: str = "cuda:0",
     checkpoint: str | Path | None = None,
+    asset_root: str | Path | None = None,
 ) -> dict[str, Any]:
     config_path = Path(config_path)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     cfg = _normalise_cfg(_load_cfg(config_path))
     dataset_root = Path(cfg["data"]["root"])
+    asset_root_path = resolve_asset_root(manifest, dataset_root, asset_root)
+    cfg["data"] = {**cfg.get("data", {}), "asset_root": str(asset_root_path)}
     rows = load_eval_rows(manifest, generated_dir, dataset_root, split)
     calibration_rows = load_eval_rows(manifest, generated_dir, dataset_root, calibration_split)
     pair_results = {(row["mid"], row["jid"], row["seed"]): dict(row) for row in rows}
@@ -589,6 +625,7 @@ def evaluate(
         "checkpoint": str(checkpoint_path) if str(checkpoint_path) else None,
         "checkpoint_sha256": sha256_path(checkpoint_path) if str(checkpoint_path) else "unspecified",
         "dataset_root": str(dataset_root),
+        "asset_root": str(asset_root_path),
         "sample_counts": {"evaluated": len(rows_out), "ok": len(rows_out) - len(failures), "failed": len(failures), "calibration": len(calibration_rows)},
         "calibration": calibration,
         "metrics": summaries,
@@ -607,6 +644,7 @@ def main() -> None:
     parser.add_argument("--split", default="test")
     parser.add_argument("--calibration-split", default="val")
     parser.add_argument("--checkpoint", required=True)
+    parser.add_argument("--asset-root", default=None, help="Root for read-only source-derived assets such as face crops, DWPose, parsing, and masks. Defaults to manifest provenance.read_only_source_root, then config data.root.")
     parser.add_argument("--device", default="cuda:0")
     args = parser.parse_args()
     summary = evaluate(
@@ -618,6 +656,7 @@ def main() -> None:
         calibration_split=args.calibration_split,
         device=args.device,
         checkpoint=args.checkpoint,
+        asset_root=args.asset_root,
     )
     print(json.dumps(summary, indent=2, ensure_ascii=False))
 

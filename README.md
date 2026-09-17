@@ -132,7 +132,12 @@ python tools/generate_role_flow_eval.py \
 
 Use `tools/evaluate_role_flow.py` with the same manifest and `--split test`
 for final held-out metrics; use `--calibration-split val` for threshold
-calibration. The generator does not modify the original dataset.
+calibration. Source-derived assets such as human face crops, mannequin DWPose
+keypoints, parsing, and garment masks are read from `--asset-root`. If it is
+omitted, the evaluator uses `provenance.read_only_source_root` from the
+manifest and falls back to config `data.root`. Generated images and clean
+manifest path resolution still use the configured dataset root. The generator
+does not modify the original dataset.
 
 ## Critical Notes
 

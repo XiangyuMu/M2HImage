@@ -10,12 +10,59 @@ import pytest
 from dataset import ASYNC_FLOW_MASK_KEYS, PairedWarmupDataset
 from tools.evaluate_role_flow import (
     METRIC_NAMES,
+    _cfg_with_data_root,
+    _dwpose_target_path,
+    _face_crop_path,
     _normalise_row,
+    _source_garment_mask,
     calibrate_tar,
     load_eval_rows,
+    resolve_asset_root,
     sha256_path,
 )
 
+
+
+
+def test_asset_root_defaults_to_manifest_read_only_source_root(tmp_path: Path) -> None:
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps({"provenance": {"read_only_source_root": "/source/assets"}, "rows": []}),
+        encoding="utf-8",
+    )
+
+    assert resolve_asset_root(manifest, "/clean/root") == Path("/source/assets")
+    assert resolve_asset_root(manifest, "/clean/root", "/override/assets") == Path("/override/assets")
+
+    manifest.write_text(json.dumps({"provenance": {}, "rows": []}), encoding="utf-8")
+    assert resolve_asset_root(manifest, "/clean/root") == Path("/clean/root")
+
+
+def test_source_asset_helpers_use_asset_root_without_changing_dataset_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    clean = tmp_path / "clean"
+    asset = tmp_path / "asset"
+    face_dir = asset / "derived/face_crops/human"
+    face_dir.mkdir(parents=True)
+    (face_dir / "id1.png").write_bytes(b"face")
+    cfg = {"data": {"root": str(clean), "asset_root": str(asset)}}
+
+    assert _face_crop_path(cfg, "id1") == face_dir / "id1.png"
+    assert _dwpose_target_path(cfg, "m1") == asset / "dwpose/keypoints/mannequin/m1.npz"
+    assert _cfg_with_data_root(cfg, asset)["data"]["root"] == str(asset)
+    assert cfg["data"]["root"] == str(clean)
+
+    calls = []
+
+    def fake_source_garment_mask(inner_cfg, mid, size):
+        calls.append((inner_cfg, mid, size))
+        return np.ones((2, 2), dtype=np.uint8)
+
+    monkeypatch.setattr("metrics_v2.parsing.source_garment_mask", fake_source_garment_mask)
+    mask = _source_garment_mask(cfg, "m1", (2, 2))
+
+    assert mask.shape == (2, 2)
+    assert calls[0][0]["data"]["root"] == str(asset)
+    assert calls[0][1:] == ("m1", (2, 2))
 
 def test_calibrate_tar_freezes_high_quantile_and_computes_tar() -> None:
     result = calibrate_tar([0.8, 0.9, 0.95], [0.1, 0.2, 0.3, 0.4], far=1e-3)

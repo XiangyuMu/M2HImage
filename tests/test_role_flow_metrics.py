@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import yaml
 
 from dataset import ASYNC_FLOW_MASK_KEYS, PairedWarmupDataset
 from tools.evaluate_role_flow import (
@@ -161,3 +162,27 @@ def test_async_flow_dataset_requests_all_required_region_masks(tmp_path: Path) -
 
     assert dataset.async_flow_enabled
     assert dataset.region_mask_keys == set(ASYNC_FLOW_MASK_KEYS)
+
+
+def test_c_async_flow_is_cumulative_with_b_region_weighting() -> None:
+    config_root = Path(__file__).resolve().parents[1] / "configs" / "role_selective"
+    with (config_root / "B_garment_weighted.yaml").open("r", encoding="utf-8") as handle:
+        config_b = yaml.safe_load(handle)
+    with (config_root / "C_async_flow.yaml").open("r", encoding="utf-8") as handle:
+        config_c = yaml.safe_load(handle)
+
+    assert config_c["experiment_method"]["name"] == "C"
+    assert "B plus" in config_c["experiment_method"]["description"]
+    assert config_c["experiment_method"]["region_schedule"] == {
+        "background": -0.5,
+        "garment": -0.5,
+        "boundary": 0.0,
+        "identity": 0.3,
+    }
+    assert config_c["training"]["paired_region_weighting"]["enabled"] is True
+    assert (
+        config_c["training"]["paired_region_weighting"]
+        == config_b["training"]["paired_region_weighting"]
+    )
+    assert config_b["training"]["resume"] is None
+    assert config_c["training"]["resume"] is None

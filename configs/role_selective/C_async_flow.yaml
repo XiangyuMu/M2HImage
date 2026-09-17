@@ -7,7 +7,7 @@ experiment:
   wandb_run_id: C_async_flow
 experiment_method:
   name: C
-  description: endpoint-preserving region-wise flow paths with corrected velocity targets
+  description: B plus endpoint-preserving region-wise flow paths with corrected velocity targets
   region_schedule:
     background: -0.5
     garment: -0.5
@@ -82,6 +82,11 @@ cache:
   heldout_face_model: /data/muxiangyu/modelLibrary/insightface/models/antelopev2
   head_crop_debug_count: 20
 training:
+  paired_region_weighting:
+    enabled: true
+    w_cloth: 2.5
+    w_hair: 1.0
+    w_face: 1.0
   total_steps: 4400
   baseline_lr: 5.0e-05
   baseline_global_batch: 16

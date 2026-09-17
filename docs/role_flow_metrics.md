@@ -43,3 +43,30 @@ threshold, per-metric valid counts, and failure counts. Reuse exactly the
 same manifest for A/B/C; the manifest SHA-256 in each summary is the protocol
 identity. Use validation outputs for development only and report the held-out
 test summary for the final comparison.
+
+## Protocol v2
+
+`tools/evaluate_role_flow_v2.py` is the paper-facing evaluator. It freezes the
+full 580-pair generation set before any metric model is loaded: 180 validation
+pairs and 400 test pairs must be present, the generated directory must contain
+exactly the expected PNG filenames, every generated PNG must be readable RGB at
+the configured resolution, and `generation_provenance.json` must match the
+config, checkpoint, manifest, row keys, image hashes, and complete status.
+
+V2 loads the held-out AdaFace `tar_calibration.json` threshold as an input
+artifact and does not recalibrate TAR during evaluation. FID is a set-level
+metric only: the real distribution is the frozen 1,971-row final-test human
+reference manifest, while `per_pair_metrics.csv` intentionally contains no FID
+column.
+
+Garment source masks come only from mannequin-side FASHN parsing labels
+`3,4,5,6,7,10`. Generated garment masks come from generated-image FASHN parsing;
+if the generated garment area is below the fixed threshold, garment metrics are
+marked invalid rather than falling back to a projected source mask. Background
+metrics use the full non-background foreground union from source and generated
+FASHN labels, erode the common background with an 11x11 kernel, then compute
+masked SSIM and spatial LPIPS.
+
+Outputs are `per_pair_metrics.csv`, `failures.csv`, `set_metrics.json`,
+`summary.json`, `provenance.json`, and `READY`. The output directory must be
+empty at start so stale metrics cannot be silently reused.

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import sys
+import types
 from pathlib import Path
 
 import numpy as np
@@ -287,6 +289,33 @@ def test_common_background_uses_full_foreground_and_11x11_erosion() -> None:
     assert not common[7, 7]
 
 
+def test_masked_ssim_averages_the_ssim_map_over_background(monkeypatch: pytest.MonkeyPatch) -> None:
+    expected_map = np.zeros((4, 4, 3), dtype=np.float32)
+    expected_map[..., 0] = 0.2
+    expected_map[..., 1] = 0.6
+    expected_map[..., 2] = 1.0
+
+    def fake_ssim(*_args, **kwargs):
+        assert kwargs["full"] is True
+        return 0.0, expected_map
+
+    skimage = types.ModuleType("skimage")
+    metrics = types.ModuleType("skimage.metrics")
+    metrics.structural_similarity = fake_ssim
+    skimage.metrics = metrics
+    monkeypatch.setitem(sys.modules, "skimage", skimage)
+    monkeypatch.setitem(sys.modules, "skimage.metrics", metrics)
+    mask = np.zeros((4, 4), dtype=bool)
+    mask[:2, :2] = True
+    result = v2._masked_ssim(
+        np.zeros((4, 4, 3), dtype=np.uint8),
+        np.zeros((4, 4, 3), dtype=np.uint8),
+        mask,
+    )
+
+    assert result == pytest.approx(0.6)
+
+
 def test_fixed_identity_threshold_is_loaded_without_recalibration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     threshold = tmp_path / "threshold.json"
     threshold.write_text(json.dumps({"artifact": "tar_calibration", "threshold": 0.5, "far_target": 1e-3}), encoding="utf-8")
@@ -303,10 +332,19 @@ def test_fixed_identity_threshold_is_loaded_without_recalibration(tmp_path: Path
 def test_fid_is_summary_only_not_per_pair(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tiny_protocol: dict[str, object]) -> None:
     paths = _fixture(tmp_path)
 
-    monkeypatch.setattr(v2, "_run_identity_metrics", lambda *a, **k: {})
-    monkeypatch.setattr(v2, "_run_garment_metrics", lambda *a, **k: {})
-    monkeypatch.setattr(v2, "_run_background_metrics", lambda *a, **k: {})
-    monkeypatch.setattr(v2, "_run_pose_metrics", lambda *a, **k: {})
+    def metric_rows(fields: tuple[str, ...]) -> dict[tuple[str, str, int], dict[str, object]]:
+        rows = {}
+        for row in json.loads(paths["manifest"].read_text(encoding="utf-8"))["rows"]:
+            key = (row["mid"], row["jid"], int(row["seed"]))
+            value = {"generated_path": str(paths["generated"] / v2.expected_filename(row)), "status": "ok", "error": ""}
+            value.update({field: 0.5 for field in fields})
+            rows[key] = value
+        return rows
+
+    monkeypatch.setattr(v2, "_run_identity_metrics", lambda *a, **k: metric_rows(("id_cosine", "tar_at_1e-3")))
+    monkeypatch.setattr(v2, "_run_garment_metrics", lambda *a, **k: metric_rows(("garment_dino", "garment_iou")))
+    monkeypatch.setattr(v2, "_run_background_metrics", lambda *a, **k: metric_rows(("bg_ssim", "bg_lpips")))
+    monkeypatch.setattr(v2, "_run_pose_metrics", lambda *a, **k: metric_rows(("pose_pck",)))
     monkeypatch.setattr(v2, "_run_fid", lambda *a, **k: 12.5)
 
     summary = v2.evaluate_v2(
@@ -329,3 +367,48 @@ def test_fid_is_summary_only_not_per_pair(tmp_path: Path, monkeypatch: pytest.Mo
     assert set_metrics["fid"]["value"] == pytest.approx(12.5)
     assert summary["status"] == "complete"
     assert (paths["output"] / "READY").is_file()
+
+
+def test_strict_rejects_missing_metric_rows_and_fields(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tiny_protocol: dict[str, object],
+) -> None:
+    paths = _fixture(tmp_path)
+
+    def complete_rows(fields: tuple[str, ...]) -> dict[tuple[str, str, int], dict[str, object]]:
+        result = {}
+        for row in json.loads(paths["manifest"].read_text(encoding="utf-8"))["rows"]:
+            key = (row["mid"], row["jid"], int(row["seed"]))
+            record = {"generated_path": str(paths["generated"] / v2.expected_filename(row)), "status": "ok", "error": ""}
+            record.update({field: 0.5 for field in fields})
+            result[key] = record
+        return result
+
+    identity = complete_rows(("id_cosine", "tar_at_1e-3"))
+    identity.pop(next(iter(identity)))
+    garment = complete_rows(("garment_dino",))
+    monkeypatch.setattr(v2, "_run_identity_metrics", lambda *a, **k: identity)
+    monkeypatch.setattr(v2, "_run_garment_metrics", lambda *a, **k: garment)
+    monkeypatch.setattr(v2, "_run_background_metrics", lambda *a, **k: complete_rows(("bg_ssim", "bg_lpips")))
+    monkeypatch.setattr(v2, "_run_pose_metrics", lambda *a, **k: complete_rows(("pose_pck",)))
+    monkeypatch.setattr(v2, "_run_fid", lambda *a, **k: 1.0)
+
+    with pytest.raises(RuntimeError, match="metric failures"):
+        v2.evaluate_v2(
+            config_path=paths["config"],
+            manifest_path=paths["manifest"],
+            generated_dir=paths["generated"],
+            generation_provenance_path=paths["generation_provenance"],
+            checkpoint_path=paths["checkpoint"],
+            asset_root=paths["asset"],
+            identity_threshold_path=paths["threshold"],
+            fid_reference_manifest_path=paths["fid"],
+            output_dir=paths["output"],
+            device="cpu",
+            strict=True,
+        )
+
+    failures = (paths["output"] / "failures.csv").read_text(encoding="utf-8")
+    assert "missing metric row" in failures
+    assert "missing fields garment_iou" in failures

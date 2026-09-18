@@ -8,7 +8,13 @@ import pytest
 from PIL import Image
 
 from tools.build_role_flow_eval_manifest import build_manifest
-from tools.generate_role_flow_eval import build_generation_inputs, load_manifest, select_rows, validate_or_prepare_output
+from tools.generate_role_flow_eval import (
+    build_generation_inputs,
+    canonical_sha256,
+    load_manifest,
+    select_rows,
+    validate_or_prepare_output,
+)
 
 
 def test_build_manifest_is_deterministic_and_excludes_quarantine(tmp_path: Path) -> None:
@@ -212,3 +218,33 @@ def test_generation_code_provenance_canary(
     if generation_script_sha256:
         assert generation["script_sha256"] == generation_script_sha256
     assert payload["code"]["finalize_tool"]["source"] == "current_tool"
+    signed = {key: value for key, value in inputs.items() if key != "input_signature_sha256"}
+    signed["code"] = {key: value for key, value in signed["code"].items() if key != "finalize_tool"}
+    assert canonical_sha256(signed) == inputs["input_signature_sha256"]
+
+
+def test_finalize_only_accepts_legacy_signature_with_finalize_tool(tmp_path: Path) -> None:
+    inputs = _generation_inputs(tmp_path)
+    output = tmp_path / "outputs"
+    for name in inputs["selection"]["expected_filenames"]:
+        _write_png(output / name)
+
+    legacy_body = dict(inputs)
+    legacy_body["code"] = dict(inputs["code"])
+    legacy_body["code"]["finalize_tool"] = {
+        "path": "/old/tools/generate_role_flow_eval.py",
+        "sha256": "old-tool-sha",
+        "git_commit": "old-commit",
+        "source": "current_tool",
+    }
+    legacy_body["input_signature_sha256"] = canonical_sha256(
+        {key: legacy_body[key] for key in ("schema_version", "inputs", "selection", "generation", "code")}
+    )
+    (output / "generation_provenance.json").write_text(
+        json.dumps({**legacy_body, "status": "complete", "images": [], "failures": []}),
+        encoding="utf-8",
+    )
+
+    payload = validate_or_prepare_output(output, inputs, finalize_only=True, device="cpu")
+    assert payload["status"] == "complete"
+    assert payload["input_signature_sha256"] == inputs["input_signature_sha256"]

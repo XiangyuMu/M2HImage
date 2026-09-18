@@ -483,7 +483,19 @@ def _masked_ssim(a: np.ndarray, b: np.ndarray, mask: np.ndarray) -> float:
         else:
             fill = np.asarray([127, 127, 127], dtype=np.float32)
         array[~mask] = np.asarray(fill, dtype=np.uint8)
-    return float(structural_similarity(left, right, channel_axis=2, data_range=255))
+    _score, score_map = structural_similarity(
+        left,
+        right,
+        channel_axis=2,
+        data_range=255,
+        full=True,
+    )
+    score_map = np.asarray(score_map, dtype=np.float32)
+    if score_map.ndim == 3:
+        score_map = score_map.mean(axis=2)
+    if score_map.shape != mask.shape:
+        raise ValueError(f"SSIM map shape mismatch: map={score_map.shape} mask={mask.shape}")
+    return float(score_map[mask].mean())
 
 
 def _masked_spatial_lpips(a: np.ndarray, b: np.ndarray, mask: np.ndarray, model: Any, device: str) -> float:
@@ -527,11 +539,18 @@ def _run_identity_metrics(ctx: ProtocolContext, cfg: dict[str, Any], device: str
     output: dict[tuple[str, str, int], dict[str, Any]] = {}
     for row in ctx.rows:
         key = _row_key(row)
+        generated_path = str(ctx.generated_dir / expected_filename(row))
         if key in failures or key not in generated or row["jid"] not in refs:
-            output[key] = {"status": "failed", "error": failures.get(key, "identity embedding missing")}
+            output[key] = {"generated_path": generated_path, "status": "failed", "error": failures.get(key, "identity embedding missing")}
             continue
         score = float(np.dot(generated[key], refs[row["jid"]]))
-        output[key] = {"id_cosine": score, "tar_at_1e-3": float(score >= ctx.identity_threshold), "status": "ok", "error": ""}
+        output[key] = {
+            "generated_path": generated_path,
+            "id_cosine": score,
+            "tar_at_1e-3": float(score >= ctx.identity_threshold),
+            "status": "ok",
+            "error": "",
+        }
     return output
 
 
@@ -549,13 +568,21 @@ def _run_garment_metrics(ctx: ProtocolContext, cfg: dict[str, Any], device: str)
     output: dict[tuple[str, str, int], dict[str, Any]] = {}
     for row in ctx.rows:
         key = _row_key(row)
+        generated_path = str(ctx.generated_dir / expected_filename(row))
         try:
             source_mask, source_record = load_source_garment_mask(ctx.asset_root, row["mid"], ctx.image_size)
             labels = load_label_map(generated_label_path(ctx.output_dir, ctx.generated_dir / expected_filename(row)), ctx.image_size)
             generated_mask = garment_mask_from_labels(labels)
             iou = garment_iou_from_masks(generated_mask, source_mask)
             if iou["status"] != "ok":
-                output[key] = {**iou, "status": iou["status"], "source_mask": source_mask, "generated_mask": generated_mask, "source_record": source_record}
+                output[key] = {
+                    **iou,
+                    "generated_path": generated_path,
+                    "status": iou["status"],
+                    "source_mask": source_mask,
+                    "generated_mask": generated_mask,
+                    "source_record": source_record,
+                }
                 continue
             mannequin = read_rgb(row["mannequin_path"], ctx.image_size)
             generated = read_rgb(ctx.generated_dir / expected_filename(row), ctx.image_size)
@@ -563,6 +590,7 @@ def _run_garment_metrics(ctx: ProtocolContext, cfg: dict[str, Any], device: str)
                 source_features[row["mid"]] = extractor.dino_feature(mannequin, source_mask.astype(np.uint8))
             generated_feature = extractor.dino_feature(generated, generated_mask.astype(np.uint8))
             output[key] = {
+                "generated_path": generated_path,
                 "garment_dino": cosine(generated_feature, source_features[row["mid"]]),
                 "garment_iou": iou["garment_iou"],
                 "source_mask": source_mask,
@@ -572,7 +600,7 @@ def _run_garment_metrics(ctx: ProtocolContext, cfg: dict[str, Any], device: str)
                 "error": "",
             }
         except Exception as exc:  # noqa: BLE001
-            output[key] = {"status": "failed", "error": str(exc)}
+            output[key] = {"generated_path": generated_path, "status": "failed", "error": str(exc)}
     return output
 
 
@@ -583,6 +611,7 @@ def _run_background_metrics(ctx: ProtocolContext, cfg: dict[str, Any], device: s
     output: dict[tuple[str, str, int], dict[str, Any]] = {}
     for row in ctx.rows:
         key = _row_key(row)
+        generated_path = str(ctx.generated_dir / expected_filename(row))
         try:
             source_label_path = _find_image(ctx.asset_root / "human_parsing" / "fashn" / "masks" / "mannequin", row["mid"])
             generated_parse_path = generated_label_path(ctx.output_dir, ctx.generated_dir / expected_filename(row))
@@ -598,6 +627,7 @@ def _run_background_metrics(ctx: ProtocolContext, cfg: dict[str, Any], device: s
             if (mannequin.shape[1], mannequin.shape[0]) != ctx.image_size:
                 mannequin = np.asarray(Image.fromarray(mannequin).resize(ctx.image_size, Image.Resampling.BICUBIC), dtype=np.uint8)
             output[key] = {
+                "generated_path": generated_path,
                 "bg_ssim": _masked_ssim(generated, mannequin, background),
                 "bg_lpips": _masked_spatial_lpips(generated, mannequin, background, model, device),
                 "background_fraction": float(background.mean()),
@@ -605,7 +635,7 @@ def _run_background_metrics(ctx: ProtocolContext, cfg: dict[str, Any], device: s
                 "error": "",
             }
         except Exception as exc:  # noqa: BLE001
-            output[key] = {"status": "failed", "error": str(exc)}
+            output[key] = {"generated_path": generated_path, "status": "failed", "error": str(exc)}
     del model
     return output
 
@@ -614,7 +644,12 @@ def _run_pose_metrics(ctx: ProtocolContext, cfg: dict[str, Any], device: str) ->
     from tools.evaluate_role_flow import _pose_pck
 
     rows = [dict(row, generated_path=str(ctx.generated_dir / expected_filename(row))) for row in ctx.rows]
-    return _pose_pck(cfg, rows, ctx.output_dir, device)
+    output = _pose_pck(cfg, rows, ctx.output_dir, device)
+    for row in ctx.rows:
+        key = _row_key(row)
+        output.setdefault(key, {})
+        output[key].setdefault("generated_path", str(ctx.generated_dir / expected_filename(row)))
+    return output
 
 
 def _run_fid(ctx: ProtocolContext, cfg: dict[str, Any], device: str) -> float:
@@ -676,11 +711,20 @@ def _write_csv(path: Path, rows: list[dict[str, Any]], fields: Iterable[str]) ->
             writer.writerow({field: row.get(field, "") for field in fields})
 
 
-def _metric_failures(item: dict[str, Any]) -> list[str]:
+def _metric_failures(item: dict[str, Any], *, metric_name: str, required_fields: tuple[str, ...], generated_path: str) -> list[str]:
+    if not isinstance(item, dict):
+        return [f"{metric_name}: missing metric row"]
+    failures: list[str] = []
+    if item.get("generated_path") != generated_path:
+        failures.append(f"{metric_name}: generated_path missing or mismatched")
+    missing = [field for field in required_fields if field not in item]
+    if missing:
+        failures.append(f"{metric_name}: missing fields {','.join(missing)}")
     status = str(item.get("status", "ok"))
     if status in {"", "ok"}:
-        return []
-    return [str(item.get("error") or status)]
+        return failures
+    failures.append(f"{metric_name}: {str(item.get('error') or status)}")
+    return failures
 
 
 def evaluate_v2(
@@ -711,10 +755,10 @@ def evaluate_v2(
     ctx.output_dir.mkdir(parents=True, exist_ok=True)
     cfg = _normalise_cfg(ctx.config_path, ctx.asset_root)
     metric_maps = [
-        _run_identity_metrics(ctx, cfg, device),
-        _run_garment_metrics(ctx, cfg, device),
-        _run_background_metrics(ctx, cfg, device),
-        _run_pose_metrics(ctx, cfg, device),
+        ("identity", ("id_cosine", "tar_at_1e-3"), _run_identity_metrics(ctx, cfg, device)),
+        ("garment", ("garment_dino", "garment_iou"), _run_garment_metrics(ctx, cfg, device)),
+        ("background", ("bg_ssim", "bg_lpips"), _run_background_metrics(ctx, cfg, device)),
+        ("pose", ("pose_pck",), _run_pose_metrics(ctx, cfg, device)),
     ]
     pair_rows: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
@@ -730,12 +774,13 @@ def evaluate_v2(
             "mannequin_path": row["mannequin_path"],
         }
         errors: list[str] = []
-        for metric in metric_maps:
-            item = metric.get(key, {})
+        generated_path = str(ctx.generated_dir / expected_filename(row))
+        for metric_name, required_fields, metric in metric_maps:
+            item = metric.get(key)
             for name in METRIC_NAMES:
-                if name in item:
+                if isinstance(item, dict) and name in item:
                     record[name] = item[name]
-            errors.extend(_metric_failures(item))
+            errors.extend(_metric_failures(item, metric_name=metric_name, required_fields=required_fields, generated_path=generated_path))
         record["status"] = "failed" if errors else "ok"
         record["error"] = " | ".join(errors)
         if errors:

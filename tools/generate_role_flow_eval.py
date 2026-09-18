@@ -64,6 +64,37 @@ def canonical_sha256(payload: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _signature_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return the stable input portion of a generation provenance payload.
+
+    ``finalize_tool`` describes the tool that wrote the provenance file. It is
+    useful audit metadata, but changing it must not invalidate generated
+    images that were produced from the same inputs.
+    """
+    signed = {
+        key: payload[key]
+        for key in ("schema_version", "inputs", "selection", "generation", "code")
+        if key in payload
+    }
+    code = signed.get("code")
+    if isinstance(code, dict):
+        signed["code"] = {key: value for key, value in code.items() if key != "finalize_tool"}
+    return signed
+
+
+def _legacy_signature_matches(payload: dict[str, Any]) -> bool:
+    """Recognize provenance written before ``finalize_tool`` was unsigned."""
+    stored = payload.get("input_signature_sha256")
+    if not isinstance(stored, str) or not stored:
+        return False
+    signed = {
+        key: payload[key]
+        for key in ("schema_version", "inputs", "selection", "generation", "code")
+        if key in payload
+    }
+    return canonical_sha256(signed) == stored
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
@@ -181,10 +212,10 @@ def build_generation_inputs(
         },
         "code": {
             "generation": generation_tool_fingerprint(generation_git_commit, generation_script_sha256),
-            "finalize_tool": tool_fingerprint(),
         },
     }
     body["input_signature_sha256"] = canonical_sha256(body)
+    body["code"]["finalize_tool"] = tool_fingerprint()
     return body
 
 
@@ -313,7 +344,12 @@ def validate_or_prepare_output(output_dir: Path, inputs: dict[str, Any], *, fina
     existing = load_generation_provenance(prov_path)
     has_pngs = output_dir.exists() and any(output_dir.glob("*.png"))
     if existing and existing.get("input_signature_sha256") != inputs["input_signature_sha256"]:
-        raise ValueError(f"existing generation_provenance.json does not match current inputs: {prov_path}")
+        compatible = (
+            canonical_sha256(_signature_payload(existing)) == inputs["input_signature_sha256"]
+            and _legacy_signature_matches(existing)
+        )
+        if not compatible:
+            raise ValueError(f"existing generation_provenance.json does not match current inputs: {prov_path}")
     if has_pngs and not existing and not finalize_only:
         raise ValueError(f"output dir already contains PNGs but no matching generation_provenance.json: {output_dir}")
     images, failures = inspect_output_dir(

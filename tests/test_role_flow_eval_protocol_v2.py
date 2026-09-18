@@ -215,6 +215,46 @@ def test_preflight_rejects_corrupt_or_wrong_size_generated_image(tmp_path: Path,
         )
 
 
+def test_preflight_rejects_unexpected_generated_files(tmp_path: Path, tiny_protocol: dict[str, object]) -> None:
+    paths = _fixture(tmp_path)
+    (paths["generated"] / ".incomplete.tmp").write_bytes(b"stale")
+    with pytest.raises(ValueError, match="unexpected files"):
+        v2.preflight_protocol(
+            config_path=paths["config"],
+            manifest_path=paths["manifest"],
+            generated_dir=paths["generated"],
+            generation_provenance_path=paths["generation_provenance"],
+            checkpoint_path=paths["checkpoint"],
+            asset_root=paths["asset"],
+            identity_threshold_path=paths["threshold"],
+            fid_reference_manifest_path=paths["fid"],
+            output_dir=paths["output"],
+        )
+
+
+def test_fid_reference_allows_duplicate_content_at_distinct_paths(tmp_path: Path, tiny_protocol: dict[str, object]) -> None:
+    paths = _fixture(tmp_path)
+    payload = json.loads(paths["fid"].read_text(encoding="utf-8"))
+    first = payload["rows"][0]
+    second = payload["rows"][1]
+    first_bytes = Path(first["human_path"]).read_bytes()
+    Path(second["human_path"]).write_bytes(first_bytes)
+    second["human_sha256"] = _sha(Path(second["human_path"]))
+    paths["fid"].write_text(json.dumps(payload), encoding="utf-8")
+    protocol = v2.preflight_protocol(
+        config_path=paths["config"],
+        manifest_path=paths["manifest"],
+        generated_dir=paths["generated"],
+        generation_provenance_path=paths["generation_provenance"],
+        checkpoint_path=paths["checkpoint"],
+        asset_root=paths["asset"],
+        identity_threshold_path=paths["threshold"],
+        fid_reference_manifest_path=paths["fid"],
+        output_dir=paths["output"],
+    )
+    assert protocol.fid_reference_count == tiny_protocol["fid_count"]
+
+
 def test_output_dir_must_be_empty_and_protocol_hashes_must_match(tmp_path: Path, tiny_protocol: dict[str, object]) -> None:
     paths = _fixture(tmp_path)
     paths["output"].mkdir()
@@ -331,6 +371,8 @@ def test_fixed_identity_threshold_is_loaded_without_recalibration(tmp_path: Path
 
 def test_fid_is_summary_only_not_per_pair(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tiny_protocol: dict[str, object]) -> None:
     paths = _fixture(tmp_path)
+    seen_metric_rows: list[int] = []
+    seen_fid_rows: list[int] = []
 
     def metric_rows(fields: tuple[str, ...]) -> dict[tuple[str, str, int], dict[str, object]]:
         rows = {}
@@ -341,11 +383,20 @@ def test_fid_is_summary_only_not_per_pair(tmp_path: Path, monkeypatch: pytest.Mo
             rows[key] = value
         return rows
 
-    monkeypatch.setattr(v2, "_run_identity_metrics", lambda *a, **k: metric_rows(("id_cosine", "tar_at_1e-3")))
-    monkeypatch.setattr(v2, "_run_garment_metrics", lambda *a, **k: metric_rows(("garment_dino", "garment_iou")))
-    monkeypatch.setattr(v2, "_run_background_metrics", lambda *a, **k: metric_rows(("bg_ssim", "bg_lpips")))
-    monkeypatch.setattr(v2, "_run_pose_metrics", lambda *a, **k: metric_rows(("pose_pck",)))
-    monkeypatch.setattr(v2, "_run_fid", lambda *a, **k: 12.5)
+    def metric_runner(ctx, fields):
+        seen_metric_rows.append(len(ctx.rows))
+        return metric_rows(fields)
+
+    monkeypatch.setattr(v2, "_run_identity_metrics", lambda ctx, *a, **k: metric_runner(ctx, ("id_cosine", "tar_at_1e-3")))
+    monkeypatch.setattr(v2, "_run_garment_metrics", lambda ctx, *a, **k: metric_runner(ctx, ("garment_dino", "garment_iou")))
+    monkeypatch.setattr(v2, "_run_background_metrics", lambda ctx, *a, **k: metric_runner(ctx, ("bg_ssim", "bg_lpips")))
+    monkeypatch.setattr(v2, "_run_pose_metrics", lambda ctx, *a, **k: metric_runner(ctx, ("pose_pck",)))
+
+    def fid_runner(ctx, *_args, **_kwargs):
+        seen_fid_rows.append(len(ctx.rows))
+        return 12.5
+
+    monkeypatch.setattr(v2, "_run_fid", fid_runner)
 
     summary = v2.evaluate_v2(
         config_path=paths["config"],
@@ -365,6 +416,10 @@ def test_fid_is_summary_only_not_per_pair(tmp_path: Path, monkeypatch: pytest.Mo
     set_metrics = json.loads((paths["output"] / "set_metrics.json").read_text(encoding="utf-8"))
     assert "fid" not in per_pair
     assert set_metrics["fid"]["value"] == pytest.approx(12.5)
+    assert seen_metric_rows == [tiny_protocol["split_counts"]["test"]] * 4
+    assert seen_fid_rows == [tiny_protocol["split_counts"]["test"]]
+    assert summary["sample_counts"]["generated"] == tiny_protocol["eval_count"]
+    assert summary["sample_counts"]["evaluated_test"] == tiny_protocol["split_counts"]["test"]
     assert summary["status"] == "complete"
     assert (paths["output"] / "READY").is_file()
 
@@ -386,7 +441,7 @@ def test_strict_rejects_missing_metric_rows_and_fields(
         return result
 
     identity = complete_rows(("id_cosine", "tar_at_1e-3"))
-    identity.pop(next(iter(identity)))
+    identity.pop(next(key for key in identity if key[0].startswith("m0005")))
     garment = complete_rows(("garment_dino",))
     monkeypatch.setattr(v2, "_run_identity_metrics", lambda *a, **k: identity)
     monkeypatch.setattr(v2, "_run_garment_metrics", lambda *a, **k: garment)

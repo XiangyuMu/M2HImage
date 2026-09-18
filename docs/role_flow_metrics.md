@@ -54,10 +54,13 @@ the configured resolution, and `generation_provenance.json` must match the
 config, checkpoint, manifest, row keys, image hashes, and complete status.
 
 V2 loads the held-out AdaFace `tar_calibration.json` threshold as an input
-artifact and does not recalibrate TAR during evaluation. FID is a set-level
-metric only: the real distribution is the frozen 1,971-row final-test human
-reference manifest, while `per_pair_metrics.csv` intentionally contains no FID
-column.
+artifact and does not recalibrate TAR during evaluation. The full 580-row set
+is used for generation preflight only; all per-pair metrics and formal means
+are computed on the 400-row final `test` split. The 180 `val` rows must still
+be generated and readable, but are excluded from metric aggregation. FID is a
+set-level metric only: generated images are the 400 final-test outputs and
+the real distribution is the frozen 1,971-row final-test human reference
+manifest, while `per_pair_metrics.csv` intentionally contains no FID column.
 
 Garment source masks come only from mannequin-side FASHN parsing labels
 `3,4,5,6,7,10`. Generated garment masks come from generated-image FASHN parsing;
@@ -67,6 +70,8 @@ metrics use the full non-background foreground union from source and generated
 FASHN labels, erode the common background with an 11x11 kernel, then compute
 masked SSIM and spatial LPIPS.
 
-Outputs are `per_pair_metrics.csv`, `failures.csv`, `set_metrics.json`,
-`summary.json`, `provenance.json`, and `READY`. The output directory must be
-empty at start so stale metrics cannot be silently reused.
+Each metric row includes a stable JSON `metric_provenance` field identifying
+the mannequin parsing source, generated parsing source, and background-mask
+construction. Outputs are `per_pair_metrics.csv`, `failures.csv`,
+`set_metrics.json`, `summary.json`, `provenance.json`, and `READY`. The output
+directory must be empty at start so stale metrics cannot be silently reused.

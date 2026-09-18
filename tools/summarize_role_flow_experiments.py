@@ -97,6 +97,13 @@ def _read_json(path: Path) -> dict[str, Any]:
     return dict(json.loads(path.read_text(encoding="utf-8")))
 
 
+def _load_set_metrics(eval_summary_path: Path) -> tuple[dict[str, Any], Path]:
+    path = eval_summary_path.with_name("set_metrics.json")
+    if not path.is_file():
+        return {}, path
+    return _read_json(path), path
+
+
 def _finite(value: Any) -> float | None:
     try:
         number = float(value)
@@ -166,9 +173,13 @@ def _summarize_one(
 
     metrics = _metric_template()
     eval_summary: dict[str, Any] = {}
+    set_metrics: dict[str, Any] = {}
+    set_metrics_path = eval_summary_path.with_name("set_metrics.json")
     if eval_summary_path.is_file():
         eval_summary = _read_json(eval_summary_path)
         for name in METRIC_DIRECTIONS:
+            if name == "fid":
+                continue
             item = dict(eval_summary.get("metrics", {}).get(name, {}))
             metrics[name].update(
                 {
@@ -178,6 +189,29 @@ def _summarize_one(
                     "failed": int(item.get("failed", 0) or 0),
                 }
             )
+        set_metrics, set_metrics_path = _load_set_metrics(eval_summary_path)
+        fid_item = dict(set_metrics.get("fid", {}))
+        if fid_item:
+            metrics["fid"].update(
+                {
+                    "mean": _finite(fid_item.get("value")),
+                    "median": _finite(fid_item.get("value")),
+                    "count": int(fid_item.get("generated_count", 0) or 0),
+                    "failed": 0 if _finite(fid_item.get("value")) is not None else 1,
+                }
+            )
+        elif "fid" in eval_summary.get("metrics", {}):
+            item = dict(eval_summary["metrics"]["fid"])
+            metrics["fid"].update(
+                {
+                    "mean": _finite(item.get("mean")),
+                    "median": _finite(item.get("median")),
+                    "count": int(item.get("count", 0) or 0),
+                    "failed": int(item.get("failed", 0) or 0),
+                }
+            )
+        if not set_metrics:
+            pending_reasons.append("missing v2 set metrics")
     else:
         pending_reasons.append("missing eval summary")
 
@@ -192,7 +226,7 @@ def _summarize_one(
         "last_loss_total": _finite(last_train.get("loss_total")),
         "last_loss_pair": _finite(last_train.get("loss_pair")),
     }
-    status = "complete" if not pending_reasons and eval_summary.get("status") in {"ok", "completed_with_failures"} else "pending"
+    status = "complete" if not pending_reasons and eval_summary.get("status") in {"ok", "complete", "completed_with_failures"} else "pending"
     return {
         "method": method,
         "status": status,
@@ -223,11 +257,14 @@ def _summarize_one(
             "summary_path": str(eval_summary_path),
             "status": eval_summary.get("status"),
             "split": eval_summary.get("split"),
+            "metric_split": eval_summary.get("protocol", {}).get("metric_split", eval_summary.get("split")),
             "calibration_split": eval_summary.get("calibration_split"),
             "sample_counts": sample_counts,
             "manifest": eval_summary.get("manifest"),
             "manifest_sha256": eval_summary.get("manifest_sha256"),
             "checkpoint_sha256_from_eval": eval_summary.get("checkpoint_sha256"),
+            "set_metrics_path": str(set_metrics_path),
+            "set_metrics": set_metrics,
         },
         "metrics": metrics,
     }

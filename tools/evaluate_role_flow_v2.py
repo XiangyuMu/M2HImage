@@ -13,7 +13,7 @@ import hashlib
 import json
 import math
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as dataclass_replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -52,6 +52,7 @@ PAIR_FIELDS = (
     "human_path",
     "mannequin_path",
     *METRIC_NAMES,
+    "metric_provenance",
     "status",
     "error",
 )
@@ -230,7 +231,6 @@ def _validate_fid_reference(path: Path) -> dict[str, Any]:
     if count != EXPECTED_FID_REFERENCE_COUNT or len(rows) != EXPECTED_FID_REFERENCE_COUNT:
         raise ValueError(f"expected exactly {EXPECTED_FID_REFERENCE_COUNT} FID reference rows, got count={count} rows={len(rows)}")
     paths: set[str] = set()
-    hashes: set[str] = set()
     for index, row in enumerate(rows):
         human_path = Path(str(row.get("human_path", "")))
         if str(row.get("split", "test")) != "test":
@@ -242,10 +242,7 @@ def _validate_fid_reference(path: Path) -> dict[str, Any]:
         resolved = str(human_path.resolve())
         if resolved in paths:
             raise ValueError(f"duplicate FID reference path: {resolved}")
-        if digest in hashes:
-            raise ValueError(f"duplicate FID reference sha256: {digest}")
         paths.add(resolved)
-        hashes.add(digest)
     return payload
 
 
@@ -289,6 +286,16 @@ def _validate_generation_provenance(
     if list(selection.get("row_keys", [])) != _selected_row_keys(rows):
         raise ValueError("generation row_keys mismatch")
 
+    expected_set = set(expected)
+    actual_files = sorted(path for path in generated_dir.iterdir() if path.is_file())
+    allowed_files = expected_set | {"generation_provenance.json"}
+    unexpected_files = sorted(path.name for path in actual_files if path.name not in allowed_files)
+    unexpected_dirs = sorted(path.name for path in generated_dir.iterdir() if path.is_dir())
+    if unexpected_files or unexpected_dirs:
+        raise ValueError(
+            "generated directory contains unexpected files: "
+            f"files={unexpected_files[:3]} dirs={unexpected_dirs[:3]}"
+        )
     actual_pngs = sorted(path.name for path in generated_dir.glob("*.png"))
     if actual_pngs != sorted(expected):
         missing = sorted(set(expected) - set(actual_pngs))
@@ -475,14 +482,7 @@ def _masked_ssim(a: np.ndarray, b: np.ndarray, mask: np.ndarray) -> float:
 
     if not bool(mask.any()):
         raise ValueError("empty background mask")
-    left = np.asarray(a, dtype=np.uint8).copy()
-    right = np.asarray(b, dtype=np.uint8).copy()
-    for array in (left, right):
-        if bool(mask.any()):
-            fill = np.mean(array[mask], axis=0)
-        else:
-            fill = np.asarray([127, 127, 127], dtype=np.float32)
-        array[~mask] = np.asarray(fill, dtype=np.uint8)
+    left, right = _fill_outside_mask(a, b, mask)
     _score, score_map = structural_similarity(
         left,
         right,
@@ -498,13 +498,25 @@ def _masked_ssim(a: np.ndarray, b: np.ndarray, mask: np.ndarray) -> float:
     return float(score_map[mask].mean())
 
 
+def _fill_outside_mask(a: np.ndarray, b: np.ndarray, mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    if not bool(mask.any()):
+        raise ValueError("empty background mask")
+    left = np.asarray(a, dtype=np.uint8).copy()
+    right = np.asarray(b, dtype=np.uint8).copy()
+    for array in (left, right):
+        fill = np.mean(array[mask], axis=0)
+        array[~mask] = np.asarray(fill, dtype=np.uint8)
+    return left, right
+
+
 def _masked_spatial_lpips(a: np.ndarray, b: np.ndarray, mask: np.ndarray, model: Any, device: str) -> float:
     import torch
 
     if not bool(mask.any()):
         raise ValueError("empty background mask")
-    ta = torch.from_numpy(a.astype(np.float32) / 127.5 - 1.0).permute(2, 0, 1).unsqueeze(0).to(device)
-    tb = torch.from_numpy(b.astype(np.float32) / 127.5 - 1.0).permute(2, 0, 1).unsqueeze(0).to(device)
+    left, right = _fill_outside_mask(a, b, mask)
+    ta = torch.from_numpy(left.astype(np.float32) / 127.5 - 1.0).permute(2, 0, 1).unsqueeze(0).to(device)
+    tb = torch.from_numpy(right.astype(np.float32) / 127.5 - 1.0).permute(2, 0, 1).unsqueeze(0).to(device)
     with torch.inference_mode():
         value = model(ta, tb)
     spatial = value.detach().float()
@@ -582,6 +594,10 @@ def _run_garment_metrics(ctx: ProtocolContext, cfg: dict[str, Any], device: str)
                     "source_mask": source_mask,
                     "generated_mask": generated_mask,
                     "source_record": source_record,
+                    "metric_provenance": {
+                        "source_garment_mask": source_record,
+                        "generated_parsing_path": str(generated_label_path(ctx.output_dir, ctx.generated_dir / expected_filename(row))),
+                    },
                 }
                 continue
             mannequin = read_rgb(row["mannequin_path"], ctx.image_size)
@@ -596,6 +612,11 @@ def _run_garment_metrics(ctx: ProtocolContext, cfg: dict[str, Any], device: str)
                 "source_mask": source_mask,
                 "generated_mask": generated_mask,
                 "source_record": source_record,
+                "metric_provenance": {
+                    "source_garment_mask": source_record,
+                    "generated_parsing_path": str(generated_label_path(ctx.output_dir, ctx.generated_dir / expected_filename(row))),
+                    "generated_parsing_sha256": sha256_file(generated_label_path(ctx.output_dir, ctx.generated_dir / expected_filename(row))),
+                },
                 "status": "ok",
                 "error": "",
             }
@@ -631,6 +652,14 @@ def _run_background_metrics(ctx: ProtocolContext, cfg: dict[str, Any], device: s
                 "bg_ssim": _masked_ssim(generated, mannequin, background),
                 "bg_lpips": _masked_spatial_lpips(generated, mannequin, background, model, device),
                 "background_fraction": float(background.mean()),
+                "metric_provenance": {
+                    "source_parsing_path": str(source_label_path),
+                    "source_parsing_sha256": sha256_file(source_label_path),
+                    "generated_parsing_path": str(generated_parse_path),
+                    "generated_parsing_sha256": sha256_file(generated_parse_path),
+                    "background_mask": "common non-background union, 11x11 erosion",
+                    "background_fraction": float(background.mean()),
+                },
                 "status": "ok",
                 "error": "",
             }
@@ -754,15 +783,21 @@ def evaluate_v2(
     )
     ctx.output_dir.mkdir(parents=True, exist_ok=True)
     cfg = _normalise_cfg(ctx.config_path, ctx.asset_root)
+    metric_rows = [row for row in ctx.rows if row["split"] == "test"]
+    if len(metric_rows) != EXPECTED_SPLIT_COUNTS["test"]:
+        raise ValueError(
+            f"formal metric split must contain {EXPECTED_SPLIT_COUNTS['test']} test rows, got {len(metric_rows)}"
+        )
+    metric_ctx = dataclass_replace(ctx, rows=metric_rows, split_counts={"test": len(metric_rows)})
     metric_maps = [
-        ("identity", ("id_cosine", "tar_at_1e-3"), _run_identity_metrics(ctx, cfg, device)),
-        ("garment", ("garment_dino", "garment_iou"), _run_garment_metrics(ctx, cfg, device)),
-        ("background", ("bg_ssim", "bg_lpips"), _run_background_metrics(ctx, cfg, device)),
-        ("pose", ("pose_pck",), _run_pose_metrics(ctx, cfg, device)),
+        ("identity", ("id_cosine", "tar_at_1e-3"), _run_identity_metrics(metric_ctx, cfg, device)),
+        ("garment", ("garment_dino", "garment_iou"), _run_garment_metrics(metric_ctx, cfg, device)),
+        ("background", ("bg_ssim", "bg_lpips"), _run_background_metrics(metric_ctx, cfg, device)),
+        ("pose", ("pose_pck",), _run_pose_metrics(metric_ctx, cfg, device)),
     ]
     pair_rows: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
-    for row in ctx.rows:
+    for row in metric_rows:
         key = _row_key(row)
         record = {
             "split": row["split"],
@@ -780,9 +815,23 @@ def evaluate_v2(
             for name in METRIC_NAMES:
                 if isinstance(item, dict) and name in item:
                     record[name] = item[name]
-            errors.extend(_metric_failures(item, metric_name=metric_name, required_fields=required_fields, generated_path=generated_path))
+            if isinstance(item, dict) and item.get("metric_provenance"):
+                record.setdefault("_metric_provenance", {}).update(item["metric_provenance"])
+            errors.extend(
+                _metric_failures(
+                    item,
+                    metric_name=metric_name,
+                    required_fields=required_fields,
+                    generated_path=generated_path,
+                )
+            )
         record["status"] = "failed" if errors else "ok"
         record["error"] = " | ".join(errors)
+        record["metric_provenance"] = json.dumps(
+            record.pop("_metric_provenance", {}),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
         if errors:
             failures.append(record)
         pair_rows.append(record)
@@ -791,8 +840,16 @@ def evaluate_v2(
         _write_csv(ctx.output_dir / "failures.csv", failures, PAIR_FIELDS)
         raise RuntimeError(f"metric failures under strict protocol v2: {len(failures)}")
 
-    fid_value = _run_fid(ctx, cfg, device)
-    set_metrics = {"fid": {"value": fid_value, "reference_count": ctx.fid_reference_count, "generated_count": len(ctx.rows)}}
+    fid_value = _run_fid(metric_ctx, cfg, device)
+    set_metrics = {
+        "scope": "test",
+        "fid": {
+            "value": fid_value,
+            "reference_count": ctx.fid_reference_count,
+            "generated_count": len(metric_rows),
+            "generated_split": "test",
+        },
+    }
     metric_summary = {}
     for name in METRIC_NAMES:
         metric_summary[name] = _summary([row.get(name) for row in pair_rows])
@@ -801,18 +858,32 @@ def evaluate_v2(
         "schema_version": SCHEMA_VERSION,
         "status": "complete" if not failures else "completed_with_failures",
         "created_at": utc_now(),
-        "sample_counts": {"evaluated": len(pair_rows), "failed": len(failures), "ok": len(pair_rows) - len(failures), **ctx.split_counts},
+        "sample_counts": {
+            "generated": len(ctx.rows),
+            "generated_val": sum(1 for row in ctx.rows if row["split"] == "val"),
+            "evaluated": len(pair_rows),
+            "evaluated_test": len(pair_rows),
+            "failed": len(failures),
+            "ok": len(pair_rows) - len(failures),
+            **ctx.split_counts,
+        },
         "metrics": metric_summary,
         "set_metrics": set_metrics,
         "protocol": {
             "eval_count": EXPECTED_EVAL_COUNT,
             "split_counts": ctx.split_counts,
+            "metric_split": "test",
+            "metric_count": len(metric_rows),
             "image_size": {"width": ctx.image_size[0], "height": ctx.image_size[1]},
             "source_garment": "mannequin FASHN labels",
             "generated_garment_fallback": "disabled",
             "background": {"foreground": "full FASHN non-background union", "erosion_kernel": BACKGROUND_EROSION_KERNEL, "lpips": "spatial masked"},
             "tar": {"far_target": 1e-3, "threshold": ctx.identity_threshold, "calibration_content_sha256": ctx.identity_threshold_payload.get("content_sha256")},
-            "fid": {"reference_count": ctx.fid_reference_count, "reference_content_sha256": ctx.fid_reference_payload.get("content_sha256"), "scope": "set_only"},
+            "fid": {
+                "reference_count": ctx.fid_reference_count,
+                "reference_content_sha256": ctx.fid_reference_payload.get("content_sha256"),
+                "scope": "test_generated_vs_final_test_real",
+            },
         },
         "inputs": {
             "config": {"path": str(ctx.config_path), "sha256": ctx.input_hashes["config"]},

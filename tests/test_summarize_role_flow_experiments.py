@@ -118,3 +118,38 @@ def test_missing_config_is_reported_without_fake_values(tmp_path: Path) -> None:
     assert experiment["status"] == "pending"
     assert experiment["metrics"]["id_cosine"]["mean"] is None
     assert "missing config" in experiment["pending_reasons"]
+
+
+def test_v2_set_metrics_supplies_fid_and_complete_status(tmp_path: Path) -> None:
+    config = tmp_path / "config.yaml"
+    _write_config(config, "A_timestep_routed", "A", "v2")
+    run = tmp_path / "run"
+    (run / "logs").mkdir(parents=True)
+    (run / "training_status.json").write_text(json.dumps({"status": "complete", "step": 4400}), encoding="utf-8")
+    (run / "checkpoints" / "final").mkdir(parents=True)
+    (run / "checkpoints" / "final" / "READY").write_text("ready\n", encoding="utf-8")
+    metrics_dir = tmp_path / "metrics"
+    metrics_dir.mkdir()
+    summary = {
+        "status": "complete",
+        "protocol": {"metric_split": "test"},
+        "sample_counts": {"generated": 580, "evaluated": 400, "evaluated_test": 400, "val": 180, "test": 400},
+        "metrics": {"id_cosine": {"mean": 0.8, "median": 0.8, "count": 400, "failed": 0}},
+    }
+    (metrics_dir / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
+    (metrics_dir / "set_metrics.json").write_text(
+        json.dumps({"scope": "test", "fid": {"value": 11.25, "generated_count": 400}}),
+        encoding="utf-8",
+    )
+    payload = summarize_experiments(
+        configs={"A": config},
+        run_dirs={"A": run},
+        eval_summaries={"A": metrics_dir / "summary.json"},
+        checkpoints={"A": run / "checkpoints" / "final"},
+        manifest=tmp_path / "missing_manifest.json",
+        output_dir=tmp_path / "out",
+    )
+    experiment = payload["experiments"]["A"]
+    assert experiment["status"] == "complete"
+    assert experiment["metrics"]["fid"]["mean"] == 11.25
+    assert experiment["eval"]["metric_split"] == "test"

@@ -8,7 +8,7 @@ from torch import nn
 
 from build_region_masks_z import pool_token_mask
 from dataset import IdentityBank
-from train_paired import DifferentialFlowModel, async_region_partition
+from train_paired import DifferentialFlowModel, WarmupFlowModel, async_region_partition
 
 
 class FakeAdapter(nn.Module):
@@ -173,6 +173,37 @@ def test_async_region_partition_is_stable_for_overlapping_bfloat16_masks() -> No
     assert torch.isfinite(total).all()
     assert torch.allclose(total, torch.ones_like(total), atol=1e-6, rtol=1e-6)
     assert all(torch.all(value >= 0.0) for value in partition.values())
+
+
+def test_async_prepare_flow_casts_schedule_outputs_to_model_dtype() -> None:
+    model = WarmupFlowModel.__new__(WarmupFlowModel)
+    nn.Module.__init__(model)
+    model.transformer = nn.Linear(1, 1, bias=False).to(dtype=torch.bfloat16)
+    model.width = 16
+    model.height = 16
+    model.async_flow_enabled = True
+    model.experiment_cfg = {
+        'region_schedule': {
+            'background': -0.5,
+            'garment': -0.5,
+            'boundary': 0.0,
+            'identity': 0.3,
+        }
+    }
+    batch = {
+        'target_latents': torch.zeros(1, 4, 1, dtype=torch.bfloat16),
+        'prompt_embeds': torch.zeros(1, 2, 4, dtype=torch.bfloat16),
+        'pooled_prompt_embeds': torch.zeros(1, 4, dtype=torch.bfloat16),
+        'cloth_safe_z': torch.tensor([[0.2, 0.7, 1.0, 0.35]], dtype=torch.bfloat16),
+        'hair_z': torch.tensor([[0.6, 0.4, 0.8, 0.35]], dtype=torch.bfloat16),
+        'face_z': torch.tensor([[0.5, 0.9, 0.3, 0.35]], dtype=torch.bfloat16),
+        'tau_override': torch.tensor([0.5], dtype=torch.bfloat16),
+    }
+
+    prepared = model._prepare_flow(batch)
+
+    for key in ('z_tau', 'target_v', 'beta', 'dbeta'):
+        assert prepared[key].dtype == torch.bfloat16
 
 
 def test_identity_bank_sampling_is_compatible_and_deterministic(tmp_path) -> None:

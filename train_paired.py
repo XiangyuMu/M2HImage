@@ -215,6 +215,8 @@ class WarmupFlowModel(torch.nn.Module):
                     for key, value in self.experiment_cfg['region_gamma'].items()
                 }
             beta, dbeta = bounded_region_schedule(tau, partition, schedule)
+            beta = beta.to(dtype=dtype)
+            dbeta = dbeta.to(dtype=dtype)
             z_tau = (1.0 - beta) * z0 + beta * z1
             target_v = dbeta * (z1 - z0)
         else:

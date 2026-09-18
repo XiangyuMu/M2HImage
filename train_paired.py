@@ -60,13 +60,28 @@ def async_region_partition(
     values = (cloth, hair, face)
     if not all(torch.isfinite(value).all() for value in values):
         raise ValueError('async region masks contain non-finite values')
-    cloth, hair, face = (value.clamp(0.0, 1.0) for value in values)
+    # Keep the input validation in the source dtype, then do the soft
+    # partition arithmetic in fp32. In particular, bf16 rounding can make
+    # an analytically unit-sum partition miss the strict tolerance below.
+    cloth, hair, face = (
+        value.to(dtype=torch.float32).clamp(0.0, 1.0)
+        for value in values
+    )
     identity = torch.maximum(face, hair)
-    partition = {
+    raw_partition = {
         'background': (1.0 - cloth) * (1.0 - identity),
         'garment': cloth * (1.0 - identity),
         'boundary': cloth * identity,
         'identity': identity * (1.0 - cloth),
+    }
+    stacked = torch.stack(tuple(raw_partition.values()), dim=0)
+    total = stacked.sum(dim=0)
+    if not torch.isfinite(total).all() or (total <= 0).any():
+        raise RuntimeError('async region partition has invalid component total')
+    stacked = stacked / total.clamp_min(torch.finfo(torch.float32).eps)
+    partition = {
+        name: stacked[index]
+        for index, name in enumerate(raw_partition)
     }
     total = sum(partition.values())
     if not torch.allclose(total, torch.ones_like(total), atol=1e-5, rtol=1e-5):

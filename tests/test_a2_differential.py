@@ -8,7 +8,7 @@ from torch import nn
 
 from build_region_masks_z import pool_token_mask
 from dataset import IdentityBank
-from train_paired import DifferentialFlowModel
+from train_paired import DifferentialFlowModel, async_region_partition
 
 
 class FakeAdapter(nn.Module):
@@ -159,6 +159,20 @@ def test_region_mask_pooling_matches_packed_token_grid() -> None:
     pooled, resized = pool_token_mask(mask, width=16, height=32)
     assert not resized
     np.testing.assert_array_equal(pooled, np.asarray([1.0, 0.0], dtype=np.float16))
+
+
+def test_async_region_partition_is_stable_for_overlapping_bfloat16_masks() -> None:
+    cloth = torch.tensor([[0.2, 0.7, 1.0, 0.35]], dtype=torch.bfloat16)
+    hair = torch.tensor([[0.6, 0.4, 0.8, 0.35]], dtype=torch.bfloat16)
+    face = torch.tensor([[0.5, 0.9, 0.3, 0.35]], dtype=torch.bfloat16)
+
+    partition = async_region_partition(cloth, hair, face)
+    total = sum(partition.values())
+
+    assert all(value.dtype == torch.float32 for value in partition.values())
+    assert torch.isfinite(total).all()
+    assert torch.allclose(total, torch.ones_like(total), atol=1e-6, rtol=1e-6)
+    assert all(torch.all(value >= 0.0) for value in partition.values())
 
 
 def test_identity_bank_sampling_is_compatible_and_deterministic(tmp_path) -> None:

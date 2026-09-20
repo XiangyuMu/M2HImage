@@ -55,6 +55,24 @@ CSV_FIELDS = (
     "ok",
     "failed",
     "manifest_sha256",
+    "manifest_content_sha256",
+    "face_detected",
+    "no_face",
+    "identity_failed",
+    "identity_status_counts",
+    "no_face_policy",
+    "protocol_eval_count",
+    "protocol_split_counts",
+    "garment_source",
+    "generated_garment_fallback",
+    "tar_threshold",
+    "tar_calibration_content_sha256",
+    "fid_reference_count",
+    "fid_generated_count",
+    "fid_reference_content_sha256",
+    "provenance_path",
+    "provenance_status",
+    "provenance_content_sha256",
     *METRIC_DIRECTIONS.keys(),
     "pending_reasons",
 )
@@ -95,6 +113,11 @@ def _load_yaml(path: Path) -> dict[str, Any]:
 
 def _read_json(path: Path) -> dict[str, Any]:
     return dict(json.loads(path.read_text(encoding="utf-8")))
+
+
+def _read_sidecar_json(eval_summary_path: Path, name: str) -> dict[str, Any]:
+    path = eval_summary_path.parent / name
+    return _read_json(path) if path.is_file() else {}
 
 
 def _load_set_metrics(eval_summary_path: Path) -> tuple[dict[str, Any], Path]:
@@ -173,6 +196,7 @@ def _summarize_one(
 
     metrics = _metric_template()
     eval_summary: dict[str, Any] = {}
+    eval_provenance: dict[str, Any] = {}
     set_metrics: dict[str, Any] = {}
     set_metrics_path = eval_summary_path.with_name("set_metrics.json")
     if eval_summary_path.is_file():
@@ -212,10 +236,17 @@ def _summarize_one(
             )
         if not set_metrics:
             pending_reasons.append("missing v2 set metrics")
+        eval_provenance = _read_sidecar_json(eval_summary_path, "provenance.json")
     else:
         pending_reasons.append("missing eval summary")
 
     sample_counts = dict(eval_summary.get("sample_counts", {}))
+    inputs = dict(eval_summary.get("inputs", {}))
+    manifest_input = dict(inputs.get("manifest", {}))
+    identity_detection = dict(eval_summary.get("identity_detection", {}))
+    protocol = dict(eval_summary.get("protocol", {}))
+    protocol_tar = dict(protocol.get("tar", {}))
+    protocol_fid = dict(protocol.get("fid", {}))
     training = {
         "status": training_status.get("status"),
         "step": training_status.get("step", last_train.get("step")),
@@ -260,11 +291,26 @@ def _summarize_one(
             "metric_split": eval_summary.get("protocol", {}).get("metric_split", eval_summary.get("split")),
             "calibration_split": eval_summary.get("calibration_split"),
             "sample_counts": sample_counts,
-            "manifest": eval_summary.get("manifest"),
-            "manifest_sha256": eval_summary.get("manifest_sha256"),
+            "manifest": eval_summary.get("manifest", manifest_input.get("path")),
+            "manifest_sha256": eval_summary.get("manifest_sha256", manifest_input.get("sha256")),
+            "manifest_content_sha256": manifest_input.get("content_sha256"),
             "checkpoint_sha256_from_eval": eval_summary.get("checkpoint_sha256"),
             "set_metrics_path": str(set_metrics_path),
             "set_metrics": set_metrics,
+            "identity_detection": identity_detection,
+            "protocol": protocol,
+            "provenance": {
+                "path": str(eval_summary_path.parent / "provenance.json"),
+                "status": eval_provenance.get("status"),
+                "content_sha256": eval_provenance.get("content_sha256"),
+                "input_sha256": eval_provenance.get("input_sha256", {}),
+                "output_sha256": eval_provenance.get("output_sha256", {}),
+            },
+            "tar_threshold": protocol_tar.get("threshold"),
+            "tar_calibration_content_sha256": protocol_tar.get("calibration_content_sha256"),
+            "fid_reference_count": protocol_fid.get("reference_count", metrics["fid"].get("reference_count")),
+            "fid_generated_count": metrics["fid"].get("count"),
+            "fid_reference_content_sha256": protocol_fid.get("reference_content_sha256"),
         },
         "metrics": metrics,
     }
@@ -293,6 +339,9 @@ def _csv_rows(experiments: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     for method in sorted(experiments):
         item = experiments[method]
         sample_counts = item["eval"]["sample_counts"]
+        identity_detection = item["eval"].get("identity_detection", {})
+        protocol = item["eval"].get("protocol", {})
+        provenance = item["eval"].get("provenance", {})
         row = {
             "method": method,
             "status": item["status"],
@@ -315,6 +364,24 @@ def _csv_rows(experiments: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
             "ok": sample_counts.get("ok"),
             "failed": sample_counts.get("failed"),
             "manifest_sha256": item["eval"].get("manifest_sha256"),
+            "manifest_content_sha256": item["eval"].get("manifest_content_sha256"),
+            "face_detected": identity_detection.get("face_detected"),
+            "no_face": identity_detection.get("no_face"),
+            "identity_failed": identity_detection.get("failed"),
+            "identity_status_counts": json.dumps(identity_detection.get("status_counts", {}), sort_keys=True),
+            "no_face_policy": identity_detection.get("no_face_policy"),
+            "protocol_eval_count": protocol.get("eval_count"),
+            "protocol_split_counts": json.dumps(protocol.get("split_counts", {}), sort_keys=True),
+            "garment_source": protocol.get("source_garment"),
+            "generated_garment_fallback": protocol.get("generated_garment_fallback"),
+            "tar_threshold": item["eval"].get("tar_threshold"),
+            "tar_calibration_content_sha256": item["eval"].get("tar_calibration_content_sha256"),
+            "fid_reference_count": item["eval"].get("fid_reference_count"),
+            "fid_generated_count": item["eval"].get("fid_generated_count"),
+            "fid_reference_content_sha256": item["eval"].get("fid_reference_content_sha256"),
+            "provenance_path": provenance.get("path"),
+            "provenance_status": provenance.get("status"),
+            "provenance_content_sha256": provenance.get("content_sha256"),
             "pending_reasons": "; ".join(item["pending_reasons"]),
         }
         for metric in METRIC_DIRECTIONS:

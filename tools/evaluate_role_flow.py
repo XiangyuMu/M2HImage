@@ -548,7 +548,7 @@ def _fid(cfg: dict[str, Any], rows: list[dict[str, Any]], generated_dir: Path, o
         isc=False,
         fid=True,
         kid=False,
-        feature_layer_fid=2048,
+        feature_layer_fid="2048",
         rng_seed=20260817,
         verbose=True,
     )

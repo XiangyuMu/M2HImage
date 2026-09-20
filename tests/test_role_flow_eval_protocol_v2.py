@@ -467,3 +467,27 @@ def test_strict_rejects_missing_metric_rows_and_fields(
     failures = (paths["output"] / "failures.csv").read_text(encoding="utf-8")
     assert "missing metric row" in failures
     assert "missing fields garment_iou" in failures
+
+def test_no_face_identity_is_conservative_and_nonfatal() -> None:
+    item = {
+        "generated_path": "/tmp/generated.png",
+        "id_cosine": -1.0,
+        "tar_at_1e-3": 0.0,
+        "identity_face_detected": False,
+        "identity_status": "no_face",
+        "identity_error": "RetinaFace found no face",
+        "status": "no_face",
+        "error": "RetinaFace found no face",
+    }
+    assert v2._metric_failures(
+        item,
+        metric_name="identity",
+        required_fields=("id_cosine", "tar_at_1e-3"),
+        generated_path="/tmp/generated.png",
+    ) == []
+    assert v2._metric_failures(
+        item,
+        metric_name="garment",
+        required_fields=("garment_dino",),
+        generated_path="/tmp/generated.png",
+    )

@@ -51,6 +51,9 @@ PAIR_FIELDS = (
     "generated_path",
     "human_path",
     "mannequin_path",
+    "identity_face_detected",
+    "identity_status",
+    "identity_error",
     *METRIC_NAMES,
     "metric_provenance",
     "status",
@@ -547,19 +550,62 @@ def _row_key(row: dict[str, Any]) -> tuple[str, str, int]:
 def _run_identity_metrics(ctx: ProtocolContext, cfg: dict[str, Any], device: str) -> dict[tuple[str, str, int], dict[str, Any]]:
     from tools.evaluate_role_flow import _embed_rows
 
-    generated, refs, failures = _embed_rows(cfg, ctx.rows, device)
+    # The evaluator receives normalized protocol rows without generated_path;
+    # inject the frozen generated path for the shared embedding helper.
+    embed_rows = [
+        dict(row, generated_path=str(ctx.generated_dir / expected_filename(row)))
+        for row in ctx.rows
+    ]
+    generated, refs, failures = _embed_rows(cfg, embed_rows, device)
     output: dict[tuple[str, str, int], dict[str, Any]] = {}
     for row in ctx.rows:
         key = _row_key(row)
         generated_path = str(ctx.generated_dir / expected_filename(row))
-        if key in failures or key not in generated or row["jid"] not in refs:
-            output[key] = {"generated_path": generated_path, "status": "failed", "error": failures.get(key, "identity embedding missing")}
+        if key in failures:
+            error = failures.get(key, "identity embedding missing")
+            if "RetinaFace found no face" in error:
+                # A detector failure is an observed identity miss, not a
+                # fabricated embedding. Keep it auditable and score it
+                # conservatively at the fixed TAR threshold.
+                output[key] = {
+                    "generated_path": generated_path,
+                    "id_cosine": -1.0,
+                    "tar_at_1e-3": 0.0,
+                    "identity_face_detected": False,
+                    "identity_status": "no_face",
+                    "identity_error": error,
+                    "status": "no_face",
+                    "error": error,
+                }
+            else:
+                output[key] = {
+                    "generated_path": generated_path,
+                    "identity_face_detected": False,
+                    "identity_status": "failed",
+                    "identity_error": error,
+                    "status": "failed",
+                    "error": error,
+                }
+            continue
+        if key not in generated or row["jid"] not in refs:
+            error = "identity embedding missing"
+            output[key] = {
+                "generated_path": generated_path,
+                "identity_face_detected": False,
+                "identity_status": "failed",
+                "identity_error": error,
+                "status": "failed",
+                "error": error,
+            }
             continue
         score = float(np.dot(generated[key], refs[row["jid"]]))
         output[key] = {
             "generated_path": generated_path,
             "id_cosine": score,
             "tar_at_1e-3": float(score >= ctx.identity_threshold),
+            "identity_face_detected": True,
+            "identity_status": "ok",
+            "identity_error": "",
             "status": "ok",
             "error": "",
         }
@@ -673,6 +719,7 @@ def _run_pose_metrics(ctx: ProtocolContext, cfg: dict[str, Any], device: str) ->
     from tools.evaluate_role_flow import _pose_pck
 
     rows = [dict(row, generated_path=str(ctx.generated_dir / expected_filename(row))) for row in ctx.rows]
+    (ctx.output_dir / "pose").mkdir(parents=True, exist_ok=True)
     output = _pose_pck(cfg, rows, ctx.output_dir, device)
     for row in ctx.rows:
         key = _row_key(row)
@@ -705,7 +752,7 @@ def _run_fid(ctx: ProtocolContext, cfg: dict[str, Any], device: str) -> float:
         isc=False,
         fid=True,
         kid=False,
-        feature_layer_fid=2048,
+        feature_layer_fid="2048",
         rng_seed=20260817,
         verbose=True,
     )
@@ -751,6 +798,8 @@ def _metric_failures(item: dict[str, Any], *, metric_name: str, required_fields:
         failures.append(f"{metric_name}: missing fields {','.join(missing)}")
     status = str(item.get("status", "ok"))
     if status in {"", "ok"}:
+        return failures
+    if metric_name == "identity" and status == "no_face":
         return failures
     failures.append(f"{metric_name}: {str(item.get('error') or status)}")
     return failures
@@ -815,6 +864,10 @@ def evaluate_v2(
             for name in METRIC_NAMES:
                 if isinstance(item, dict) and name in item:
                     record[name] = item[name]
+            if metric_name == "identity" and isinstance(item, dict):
+                for name in ("identity_face_detected", "identity_status", "identity_error"):
+                    if name in item:
+                        record[name] = item[name]
             if isinstance(item, dict) and item.get("metric_provenance"):
                 record.setdefault("_metric_provenance", {}).update(item["metric_provenance"])
             errors.extend(
@@ -854,6 +907,19 @@ def evaluate_v2(
     for name in METRIC_NAMES:
         metric_summary[name] = _summary([row.get(name) for row in pair_rows])
         metric_summary[name]["failed"] = sum(_finite(row.get(name)) is None for row in pair_rows)
+    identity_status_counts: dict[str, int] = {}
+    face_detected = 0
+    no_face = 0
+    identity_failed = 0
+    for row in pair_rows:
+        status = str(row.get("identity_status", "unknown"))
+        identity_status_counts[status] = identity_status_counts.get(status, 0) + 1
+        if row.get("identity_face_detected") is True:
+            face_detected += 1
+        elif status == "no_face":
+            no_face += 1
+        elif status not in {"ok", "unknown"}:
+            identity_failed += 1
     summary = {
         "schema_version": SCHEMA_VERSION,
         "status": "complete" if not failures else "completed_with_failures",
@@ -868,6 +934,13 @@ def evaluate_v2(
             **ctx.split_counts,
         },
         "metrics": metric_summary,
+        "identity_detection": {
+            "face_detected": face_detected,
+            "no_face": no_face,
+            "failed": identity_failed,
+            "status_counts": identity_status_counts,
+            "no_face_policy": "id_cosine=-1.0; tar_at_1e-3=0.0",
+        },
         "set_metrics": set_metrics,
         "protocol": {
             "eval_count": EXPECTED_EVAL_COUNT,
